@@ -1,0 +1,312 @@
+@import "tailwindcss";
+
+/* ─── Design Tokens ─── */
+:root {
+  --sidebar-w: 256px;
+  --sidebar-bg: #0f172a;
+  --sidebar-border: rgba(255,255,255,0.06);
+  --sidebar-active: #6366f1;
+  --sidebar-hover: rgba(255,255,255,0.07);
+  --accent-indigo: #6366f1;
+  --accent-blue: #3b82f6;
+  --accent-teal: #14b8a6;
+  --btn-radius: 9999px;
+  --page-bg: #0d1117;
+  --page-bg-alt: #111827;
+  --page-bg-card: #1e293b;
+}
+
+@layer base {
+  body {
+    background: var(--page-bg);
+    background-attachment: fixed;
+    color: #f1f5f9;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+/* ─── App Shell: sidebar + content ─── */
+.app-shell {
+  display: flex;
+  min-height: 100vh;
+}
+
+.app-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ─── Sidebar ─── */
+.sidebar {
+  width: var(--sidebar-w);
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--sidebar-border);
+  display: flex;
+  flex-direction: column;
+  position: fixed;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 50;
+  transition: transform 0.3s ease;
+}
+
+.sidebar-logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 24px 20px 20px;
+  border-bottom: 1px solid var(--sidebar-border);
+  text-decoration: none;
+}
+
+.sidebar-logo-icon {
+  width: 36px;
+  height: 36px;
+  background: linear-gradient(135deg, var(--accent-indigo), var(--accent-blue));
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sidebar-logo-text {
+  font-size: 16px;
+  font-weight: 800;
+  color: #fff;
+  letter-spacing: -0.3px;
+}
+
+.sidebar-logo-text span {
+  color: #818cf8;
+}
+
+.sidebar-nav {
+  flex: 1;
+  padding: 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+}
+
+.sidebar-nav-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: rgba(255,255,255,0.3);
+  padding: 12px 8px 6px;
+}
+
+.sidebar-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 500;
+  color: rgba(255,255,255,0.6);
+  text-decoration: none;
+  transition: all 0.15s ease;
+  cursor: pointer;
+  border: none;
+  background: none;
+  width: 100%;
+  text-align: left;
+}
+
+.sidebar-link:hover {
+  background: var(--sidebar-hover);
+  color: rgba(255,255,255,0.9);
+}
+
+.sidebar-link.active {
+  background: rgba(99,102,241,0.15);
+  color: #a5b4fc;
+  font-weight: 600;
+}
+
+.sidebar-link svg {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.sidebar-link.active svg {
+  opacity: 1;
+  color: #a5b4fc;
+}
+
+.sidebar-footer {
+  padding: 12px;
+  border-top: 1px solid var(--sidebar-border);
+}
+
+.sidebar-user {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  margin-bottom: 4px;
+}
+
+.sidebar-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent-indigo), var(--accent-blue));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: #fff;
+  flex-shrink: 0;
+}
+
+.sidebar-username {
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.85);
+  truncate: true;
+}
+
+.sidebar-logout {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 500;
+  color: rgba(255,255,255,0.45);
+  background: none;
+  border: none;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.sidebar-logout:hover {
+  background: rgba(239,68,68,0.1);
+  color: #fca5a5;
+}
+
+/* ─── Content offset when sidebar visible ─── */
+.with-sidebar {
+  margin-left: var(--sidebar-w);
+}
+
+/* ─── Professional pill button utility ─── */
+.btn-pill {
+  border-radius: var(--btn-radius) !important;
+}
+
+/* ─── Floating blob animations ─── */
+@keyframes blob-drift-1 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33%       { transform: translate(60px, -40px) scale(1.08); }
+  66%       { transform: translate(-30px, 30px) scale(0.94); }
+}
+@keyframes blob-drift-2 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  40%       { transform: translate(-50px, 40px) scale(1.05); }
+  70%       { transform: translate(40px, -20px) scale(0.96); }
+}
+@keyframes blob-drift-3 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  30%       { transform: translate(30px, 50px) scale(1.1); }
+  60%       { transform: translate(-60px, -30px) scale(0.92); }
+}
+
+.blob {
+  position: fixed;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 0.35;
+  will-change: transform;
+}
+.blob-1 {
+  width: 520px; height: 520px;
+  top: -120px; left: -80px;
+  background: radial-gradient(circle, #93c5fd, #67e8f9);
+  animation: blob-drift-1 18s ease-in-out infinite;
+}
+.blob-2 {
+  width: 420px; height: 420px;
+  top: 40%; right: -100px;
+  background: radial-gradient(circle, #5eead4, #818cf8);
+  animation: blob-drift-2 22s ease-in-out infinite;
+}
+.blob-3 {
+  width: 350px; height: 350px;
+  bottom: 5%; left: 30%;
+  background: radial-gradient(circle, #bae6fd, #99f6e4);
+  animation: blob-drift-3 26s ease-in-out infinite;
+}
+
+/* ─── Floating particles ─── */
+@keyframes particle-float {
+  0%, 100% { transform: translateY(0px) scale(1); opacity: 0.4; }
+  50%       { transform: translateY(-24px) scale(1.2); opacity: 0.7; }
+}
+
+.particle {
+  position: fixed;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(96, 165, 250, 0.6), rgba(94, 234, 212, 0.3));
+  filter: blur(1px);
+  animation: particle-float linear infinite;
+  pointer-events: none;
+}
+.particle-1 { width: 6px;  height: 6px;  animation-duration: 6s; }
+.particle-2 { width: 8px;  height: 8px;  animation-duration: 8s; }
+.particle-3 { width: 5px;  height: 5px;  animation-duration: 5s; }
+.particle-4 { width: 10px; height: 10px; animation-duration: 9s; }
+.particle-5 { width: 7px;  height: 7px;  animation-duration: 7s; }
+.particle-6 { width: 4px;  height: 4px;  animation-duration: 4s; }
+
+.particle:nth-child(1)  { top: 10%; left: 5%;  animation-delay: 0s; }
+.particle:nth-child(2)  { top: 25%; left: 15%; animation-delay: 1s; }
+.particle:nth-child(3)  { top: 60%; left: 8%;  animation-delay: 2s; }
+.particle:nth-child(4)  { top: 80%; left: 25%; animation-delay: 3s; }
+.particle:nth-child(5)  { top: 15%; left: 40%; animation-delay: 0.5s; }
+.particle:nth-child(6)  { top: 45%; left: 55%; animation-delay: 1.5s; }
+.particle:nth-child(7)  { top: 70%; left: 65%; animation-delay: 2.5s; }
+.particle:nth-child(8)  { top: 30%; left: 75%; animation-delay: 0.8s; }
+.particle:nth-child(9)  { top: 55%; left: 85%; animation-delay: 3.5s; }
+.particle:nth-child(10) { top: 90%; left: 90%; animation-delay: 1.2s; }
+.particle:nth-child(11) { top: 5%;  left: 90%; animation-delay: 4s; }
+.particle:nth-child(12) { top: 85%; left: 50%; animation-delay: 2.8s; }
+.particle:nth-child(13) { top: 20%; left: 60%; animation-delay: 0.3s; }
+.particle:nth-child(14) { top: 35%; left: 35%; animation-delay: 1.8s; }
+.particle:nth-child(15) { top: 50%; left: 20%; animation-delay: 3.2s; }
+.particle:nth-child(16) { top: 65%; left: 45%; animation-delay: 0.7s; }
+.particle:nth-child(17) { top: 75%; left: 80%; animation-delay: 2.1s; }
+.particle:nth-child(18) { top: 40%; left: 95%; animation-delay: 4.5s; }
+
+/* ─── Hero text entrance animations ─── */
+@keyframes fade-in-down {
+  from { opacity: 0; transform: translateY(-16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.animate-fade-in-down { animation: fade-in-down 0.7s ease both; }
+.animate-fade-in-up   { animation: fade-in-up 0.8s ease 0.15s both; }
+.animate-fade-in      { animation: fade-in 1s ease 0.3s both; }
