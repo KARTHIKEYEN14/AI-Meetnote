@@ -54,6 +54,90 @@
   transition: transform 0.3s ease;
 }
 
+/* Desktop sidebar – always visible */
+.sidebar-desktop {
+  display: flex;
+}
+
+/* Mobile sidebar – hidden by default, slides in */
+.sidebar-mobile {
+  display: flex;
+  transform: translateX(-100%);
+  box-shadow: 4px 0 30px rgba(0,0,0,0.5);
+}
+.sidebar-mobile.open {
+  transform: translateX(0);
+}
+
+/* Mobile overlay backdrop */
+.mobile-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  backdrop-filter: blur(2px);
+  z-index: 49;
+}
+
+/* Mobile top bar (hamburger row) */
+.mobile-topbar {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 56px;
+  background: var(--sidebar-bg);
+  border-bottom: 1px solid var(--sidebar-border);
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  z-index: 48;
+}
+.mobile-topbar-logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-decoration: none;
+}
+.mobile-hamburger {
+  background: none;
+  border: none;
+  color: rgba(255,255,255,0.7);
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 8px;
+  transition: background 0.15s;
+}
+.mobile-hamburger:hover {
+  background: rgba(255,255,255,0.08);
+  color: #fff;
+}
+
+/* Close button inside mobile sidebar */
+.sidebar-close-btn {
+  display: none;
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: rgba(255,255,255,0.5);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 6px;
+  transition: color 0.15s;
+}
+.sidebar-close-btn:hover {
+  color: #fff;
+}
+
+@media (max-width: 768px) {
+  .sidebar-desktop { display: none; }
+  .sidebar-mobile  { display: flex; }
+  .mobile-overlay  { display: block; }
+  .mobile-topbar   { display: flex; }
+  .sidebar-close-btn { display: block; }
+}
+
 .sidebar-logo {
   display: flex;
   align-items: center;
@@ -205,9 +289,42 @@
   margin-left: var(--sidebar-w);
 }
 
+@media (max-width: 768px) {
+  .with-sidebar {
+    margin-left: 0;
+    padding-top: 56px; /* height of mobile topbar */
+  }
+}
+
 /* ─── Professional pill button utility ─── */
 .btn-pill {
   border-radius: var(--btn-radius) !important;
+}
+
+/* ─── Recording page responsive panel ─── */
+@media (max-width: 768px) {
+  .recording-body {
+    flex-direction: column !important;
+  }
+  .recording-right-panel {
+    width: 100% !important;
+    border-left: none !important;
+    border-top: 1px solid rgba(255,255,255,0.1);
+    max-height: 240px;
+  }
+  .recording-topbar-title {
+    max-width: 120px;
+  }
+  .recording-end-btn span {
+    display: none;
+  }
+}
+
+/* ─── General page padding for small screens ─── */
+@media (max-width: 640px) {
+  .dashboard-grid-2 {
+    grid-template-columns: 1fr !important;
+  }
 }
 
 /* ─── Floating blob animations ─── */

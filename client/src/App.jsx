@@ -12,7 +12,7 @@ import SummaryPage from './pages/SummaryPage';
 import ProtectedRoute from './components/ProtectedRoute';
 
 // Pages that don't need the sidebar (full-screen experience)
-const NO_SIDEBAR_PATHS = ['/'];
+const NO_SIDEBAR_PATHS = ['/', '/login', '/register'];
 
 function AppShell() {
   const location = useLocation();

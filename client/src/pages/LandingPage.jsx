@@ -7,23 +7,23 @@ export default function LandingPage() {
     <div className="flex flex-col min-h-screen bg-[#0d1117] text-white">
 
       {/* ── Navbar ── */}
-      <header className="w-full flex justify-between items-center px-8 py-5 border-b border-white/5 bg-[#0d1117]/80 backdrop-blur-md sticky top-0 z-50">
+      <header className="w-full flex justify-between items-center px-4 sm:px-8 py-4 sm:py-5 border-b border-white/5 bg-[#0d1117]/80 backdrop-blur-md sticky top-0 z-50">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-600 to-blue-500 flex items-center justify-center">
             <Mic className="w-4 h-4 text-white" />
           </div>
-          <span className="font-extrabold text-white text-base">Meet<span className="text-indigo-400"> Note</span></span>
+          <span className="font-extrabold text-white text-base">Meet<span className="text-indigo-400">Note</span></span>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3">
           <Link
             to="/login"
-            className="px-5 py-2 rounded-full font-semibold text-slate-300 bg-white/5 border border-white/10 hover:bg-white/10 hover:text-white transition-all text-sm"
+            className="px-4 sm:px-5 py-2 rounded-full font-semibold text-slate-300 bg-white/5 border border-white/10 hover:bg-white/10 hover:text-white transition-all text-sm"
           >
             Log In
           </Link>
           <Link
             to="/register"
-            className="px-5 py-2 rounded-full font-semibold text-white bg-gradient-to-r from-indigo-600 to-blue-500 shadow-lg shadow-indigo-500/25 hover:shadow-indigo-500/40 hover:-translate-y-0.5 transition-all text-sm"
+            className="px-4 sm:px-5 py-2 rounded-full font-semibold text-white bg-gradient-to-r from-indigo-600 to-blue-500 shadow-lg shadow-indigo-500/25 hover:shadow-indigo-500/40 hover:-translate-y-0.5 transition-all text-sm"
           >
             Sign Up
           </Link>
@@ -31,7 +31,7 @@ export default function LandingPage() {
       </header>
 
       {/* ── Hero ── */}
-      <section className="relative flex flex-col items-center justify-center text-center px-4 py-32 overflow-hidden">
+      <section className="relative flex flex-col items-center justify-center text-center px-4 py-16 sm:py-32 overflow-hidden">
         {/* Background glow */}
         <div className="absolute inset-0 -z-10">
           <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[500px] bg-gradient-to-b from-indigo-600/20 via-blue-600/10 to-transparent blur-3xl rounded-full" />

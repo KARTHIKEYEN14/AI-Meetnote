@@ -13,7 +13,7 @@ const allowedOrigins = [
   'http://localhost:5173',
   'http://localhost:4173',
   // 👇 Replace with your actual Vercel URL after deploying the frontend
-  'https://meetnote.vercel.app',
+  'https://ai-meetnote.vercel.app',
   process.env.FRONTEND_URL, // optional: set this env var on Render for flexibility
 ].filter(Boolean);
 app.use(cors({

@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import {
-  Mic, Home, LayoutDashboard, PlusCircle, Users, LogOut, ChevronRight
+  Mic, Home, LayoutDashboard, PlusCircle, Users, LogOut, ChevronRight, Menu, X
 } from 'lucide-react';
 
 export default function Sidebar() {
   const navigate = useNavigate();
   const location = useLocation();
+  const [mobileOpen, setMobileOpen] = useState(false);
 
   const [isAuthenticated, setIsAuthenticated] = useState(
     () => !!localStorage.getItem('token')
@@ -28,6 +29,17 @@ export default function Sidebar() {
     window.addEventListener('storage', onStorage);
     return () => window.removeEventListener('storage', onStorage);
   }, []);
+
+  // Close mobile drawer on route change
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [location.pathname]);
+
+  // Prevent body scroll when mobile drawer is open
+  useEffect(() => {
+    document.body.style.overflow = mobileOpen ? 'hidden' : '';
+    return () => { document.body.style.overflow = ''; };
+  }, [mobileOpen]);
 
   const handleLogout = () => {
     localStorage.removeItem('token');
@@ -52,21 +64,28 @@ export default function Sidebar() {
     </Link>
   );
 
-  return (
-    <aside className="sidebar">
+  const sidebarContent = (
+    <>
       {/* Logo */}
       <Link to="/" className="sidebar-logo">
         <div className="sidebar-logo-icon">
           <Mic style={{ width: 18, height: 18, color: '#fff' }} />
         </div>
         <span className="sidebar-logo-text">
-          AI <span>Minutes</span>
+          Meet<span>Note</span>
         </span>
+        {/* Close button (mobile only) */}
+        <button
+          className="sidebar-close-btn"
+          onClick={() => setMobileOpen(false)}
+          aria-label="Close menu"
+        >
+          <X style={{ width: 18, height: 18 }} />
+        </button>
       </Link>
 
       {/* Navigation */}
       <nav className="sidebar-nav">
-        {/* Home — when logged in, logs user out first then goes to landing */}
         {isAuthenticated ? (
           <button
             onClick={handleLogout}
@@ -126,6 +145,46 @@ export default function Sidebar() {
           </button>
         </div>
       )}
-    </aside>
+    </>
+  );
+
+  return (
+    <>
+      {/* Desktop sidebar */}
+      <aside className="sidebar sidebar-desktop">
+        {sidebarContent}
+      </aside>
+
+      {/* Mobile top bar */}
+      <div className="mobile-topbar">
+        <Link to="/" className="mobile-topbar-logo">
+          <div className="sidebar-logo-icon" style={{ width: 30, height: 30 }}>
+            <Mic style={{ width: 15, height: 15, color: '#fff' }} />
+          </div>
+          <span className="sidebar-logo-text">Meet<span>Note</span></span>
+        </Link>
+        <button
+          className="mobile-hamburger"
+          onClick={() => setMobileOpen(true)}
+          aria-label="Open menu"
+        >
+          <Menu style={{ width: 22, height: 22 }} />
+        </button>
+      </div>
+
+      {/* Mobile drawer overlay */}
+      {mobileOpen && (
+        <div
+          className="mobile-overlay"
+          onClick={() => setMobileOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
+      {/* Mobile drawer */}
+      <aside className={`sidebar sidebar-mobile${mobileOpen ? ' open' : ''}`}>
+        {sidebarContent}
+      </aside>
+    </>
   );
 }

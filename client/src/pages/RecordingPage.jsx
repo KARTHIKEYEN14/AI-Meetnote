@@ -272,16 +272,16 @@ export default function RecordingPage() {
             id="end-meeting-btn"
             onClick={handleEndMeeting}
             disabled={isEnding}
-            className="flex items-center gap-2 px-4 py-1.5 bg-red-600 hover:bg-red-700 text-white text-sm font-bold rounded-full transition-all disabled:opacity-50"
+            className="recording-end-btn flex items-center gap-2 px-4 py-1.5 bg-red-600 hover:bg-red-700 text-white text-sm font-bold rounded-full transition-all disabled:opacity-50"
           >
             <Square className="w-3.5 h-3.5 fill-white" />
-            End Meeting
+            <span>End Meeting</span>
           </button>
         </div>
       </div>
 
       {/* ── Body: left transcript + right panel ──────────────────────────── */}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="recording-body flex flex-1 overflow-hidden">
 
         {/* ── LEFT: Live Transcript Area ───────────────────────────────── */}
         <div className="flex-1 flex flex-col p-5 overflow-hidden">
@@ -367,7 +367,7 @@ export default function RecordingPage() {
         </div>
 
         {/* ── RIGHT: People / Notes panel ──────────────────────────────── */}
-        <div className="w-72 border-l border-white/10 flex flex-col bg-[#111827]">
+        <div className="recording-right-panel w-72 border-l border-white/10 flex flex-col bg-[#111827]">
           {/* Tab bar */}
           <div className="flex border-b border-white/10">
             {[
