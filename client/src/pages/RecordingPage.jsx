@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Mic, MicOff, X, UserPlus, Users, FileText, Square, ArrowLeft, Mail, Loader, Radio, Upload, Trash2 } from 'lucide-react';
+import { Mic, MicOff, X, UserPlus, Users, FileText, Square, ArrowLeft, Mail, Loader, Radio, Upload, Trash2, Copy, Eye, EyeOff, Check, KeyRound } from 'lucide-react';
 import api from '../services/api';
 
 const POLL_INTERVAL_MS = 3000;
@@ -13,7 +13,7 @@ export default function RecordingPage() {
   const currentInfo = JSON.parse(localStorage.getItem('currentMeetingInfo') || '{}');
   const meetingTitle  = currentInfo.title  || `Meeting ${id}`;
   const meetingAgenda = currentInfo.agenda || '';
-  const passkey       = currentInfo.passkey || ''; // kept private — not displayed in UI
+  const passkey       = currentInfo.passkey || '';
   const remoteMode    = currentInfo.remoteMode === true;
   const expectedParts = currentInfo.expectedParticipants || 0;
 
@@ -44,6 +44,8 @@ export default function RecordingPage() {
   const [showBackConfirm, setShowBackConfirm] = useState(false);
   const [chunkStatus, setChunkStatus] = useState(null); // remote mode progress
   const [submitted, setSubmitted] = useState(false);    // remote: chunk uploaded
+  const [passkeyVisible, setPasskeyVisible] = useState(false); // show/hide passkey digits
+  const [passkeyCopied, setPasskeyCopied] = useState(false);   // copy feedback
 
   // ── Audio refs ──────────────────────────────────────────────────────────────
   const audioChunksRef = useRef([]);
@@ -550,6 +552,57 @@ export default function RecordingPage() {
           <div className="flex-1 overflow-y-auto p-4">
             {activeTab === 'people' && (
               <div className="space-y-2">
+
+                {/* ── Passkey card — host shares this manually ── */}
+                {passkey && (
+                  <div className="mb-3 rounded-2xl border border-indigo-500/30 bg-indigo-950/40 p-3">
+                    <div className="flex items-center gap-1.5 mb-2">
+                      <KeyRound className="w-3.5 h-3.5 text-indigo-400" />
+                      <span className="text-xs font-bold text-indigo-300 uppercase tracking-wider">Meeting Passkey</span>
+                    </div>
+
+                    {/* Passkey value row */}
+                    <div className="flex items-center gap-2 mb-2">
+                      <span
+                        className="flex-1 font-mono font-black text-xl tracking-[0.22em] text-white select-all"
+                        style={{ letterSpacing: passkeyVisible ? '0.22em' : undefined }}
+                      >
+                        {passkeyVisible ? passkey : '••••••'}
+                      </span>
+
+                      {/* Show / hide */}
+                      <button
+                        onClick={() => setPasskeyVisible(v => !v)}
+                        title={passkeyVisible ? 'Hide passkey' : 'Reveal passkey'}
+                        className="w-7 h-7 rounded-full bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white flex items-center justify-center transition-all"
+                      >
+                        {passkeyVisible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                      </button>
+
+                      {/* Copy */}
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(passkey);
+                          setPasskeyCopied(true);
+                          setTimeout(() => setPasskeyCopied(false), 2000);
+                        }}
+                        title="Copy passkey"
+                        className={`w-7 h-7 rounded-full flex items-center justify-center transition-all ${
+                          passkeyCopied
+                            ? 'bg-green-500/20 text-green-400 border border-green-500/40'
+                            : 'bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        {passkeyCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+
+                    <p className="text-xs text-slate-500 leading-relaxed">
+                      Share this passkey with co-recorders. They open <span className="text-slate-400 font-medium">Join Meeting</span> and enter it.
+                    </p>
+                  </div>
+                )}
+
                 {speakers.map((sp, idx) => (
                   <div
                     key={idx}
