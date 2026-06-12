@@ -9,13 +9,15 @@ export default function RecordingPage() {
   const { id } = useParams();
   const navigate = useNavigate();
 
-  // ── Meeting info ────────────────────────────────────────────────────────────
-  const currentInfo = JSON.parse(localStorage.getItem('currentMeetingInfo') || '{}');
-  const meetingTitle  = currentInfo.title  || `Meeting ${id}`;
-  const meetingAgenda = currentInfo.agenda || '';
-  const passkey       = currentInfo.passkey || '';
-  const remoteMode    = currentInfo.remoteMode === true;
-  const expectedParts = currentInfo.expectedParticipants || 0;
+  // ── Meeting info — loaded from API (reliable) + localStorage (instant fallback) ──
+  const currentInfo   = JSON.parse(localStorage.getItem('currentMeetingInfo') || '{}');
+
+  const [meetingTitle,  setMeetingTitle]  = useState(currentInfo.title   || `Meeting ${id}`);
+  const [meetingAgenda, setMeetingAgenda] = useState(currentInfo.agenda  || '');
+  const [passkey,       setPasskey]       = useState(currentInfo.passkey || '');
+  const [remoteMode,    setRemoteMode]    = useState(currentInfo.remoteMode === true);
+  // expectedParts is used for remote mode display only
+  const [expectedParts, setExpectedParts] = useState(currentInfo.expectedParticipants || 0);
 
   // ── Speakers / participants ─────────────────────────────────────────────────
   const hostUser = JSON.parse(localStorage.getItem('user') || '{}');
@@ -296,6 +298,29 @@ export default function RecordingPage() {
       setError(err.response?.data?.message || 'Upload failed. Please try again.');
     }
   };
+
+  // ── Fetch meeting from API on mount — ensures passkey is always available ──
+  // (localStorage is empty after a Vercel deploy, page refresh, or direct URL)
+  useEffect(() => {
+    api.get(`/meetings/${id}`)
+      .then(({ data }) => {
+        if (data.passkey)   setPasskey(data.passkey);
+        if (data.title)     setMeetingTitle(data.title);
+        if (data.agenda)    setMeetingAgenda(data.agenda);
+        setRemoteMode(!!data.remoteMode);
+        setExpectedParts(data.expectedParticipants || 0);
+        // Also refresh localStorage so it's in sync
+        localStorage.setItem('currentMeetingInfo', JSON.stringify({
+          title:                data.title,
+          passkey:              data.passkey,
+          agenda:               data.agenda,
+          remoteMode:           data.remoteMode,
+          expectedParticipants: data.expectedParticipants,
+        }));
+      })
+      .catch((err) => console.warn('[RecordingPage] Could not fetch meeting:', err.message));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
 
   // ── Auto-start on mount ──────────────────────────────────────────────────
   useEffect(() => {
