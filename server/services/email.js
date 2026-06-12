@@ -9,6 +9,15 @@ const transporter = nodemailer.createTransport({
   },
 });
 
+// Verify transporter on startup so email misconfigurations surface immediately
+transporter.verify((err) => {
+  if (err) {
+    console.error('❌ Email transporter configuration error:', err.message);
+  } else {
+    console.log('✅ Email transporter ready — using', process.env.EMAIL_USER);
+  }
+});
+
 /**
  * Format the meeting summary as a clean plain-text email body.
  */
@@ -160,6 +169,10 @@ async function sendSummaryEmail(recipients, meeting, docxBuffer) {
 async function sendPasskeyEmail(toEmail, toName, meeting) {
   const { title, agenda, passkey } = meeting;
 
+  if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+    throw new Error('Email credentials not configured (EMAIL_USER / EMAIL_PASS missing in .env)');
+  }
+
   const html = `
 <!DOCTYPE html>
 <html>
@@ -167,14 +180,14 @@ async function sendPasskeyEmail(toEmail, toName, meeting) {
 <body style="font-family:Inter,sans-serif;background:#f8fafc;padding:32px;margin:0">
   <div style="max-width:520px;margin:auto;background:#fff;border-radius:20px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,.08)">
     <div style="background:linear-gradient(135deg,#4f46e5,#3b82f6);padding:32px">
-      <h1 style="color:#fff;margin:0;font-size:20px">🎙️ You've been invited to record</h1>
+      <h1 style="color:#fff;margin:0;font-size:20px">&#127897;&#65039; You've been invited to record</h1>
       <p style="color:rgba(255,255,255,.8);margin:8px 0 0;font-size:14px">${title}</p>
     </div>
     <div style="padding:32px">
       <p style="color:#334155;margin:0 0 16px">Hi <strong>${toName}</strong>,</p>
       <p style="color:#64748b;margin:0 0 24px;line-height:1.6">
         You have been added as a <strong>co-recorder</strong> for the meeting
-        <strong>"${title}"</strong>${agenda ? ` (${agenda})` : ''}.
+        <strong>&quot;${title}&quot;</strong>${agenda ? ` (${agenda})` : ''}.
         Use the passkey below to join from your device.
       </p>
 
@@ -187,27 +200,32 @@ async function sendPasskeyEmail(toEmail, toName, meeting) {
         <p style="color:#4338ca;font-size:13px;font-weight:600;margin:0 0 6px">How to join:</p>
         <ol style="color:#6366f1;font-size:13px;padding-left:20px;margin:0;line-height:1.8">
           <li>Open the AI Minutes app</li>
-          <li>Click <strong>"Join Meeting"</strong> in the sidebar</li>
+          <li>Click <strong>&quot;Join Meeting&quot;</strong> in the sidebar</li>
           <li>Enter the passkey above and your email</li>
           <li>Start recording!</li>
         </ol>
       </div>
 
-      <p style="font-size:12px;color:#94a3b8;text-align:center;margin:0">Sent by AI MeetNote • Powered by Groq AI</p>
+      <p style="font-size:12px;color:#94a3b8;text-align:center;margin:0">Sent by AI MeetNote &bull; Powered by Groq AI</p>
     </div>
   </div>
 </body>
 </html>`;
 
+  // Build a safe "from" address — nodemailer accepts "Display Name <email@domain>" format
+  const fromAddress = process.env.EMAIL_FROM || process.env.EMAIL_USER;
+
+  console.log(`[sendPasskeyEmail] Attempting to send to: ${toEmail} from: ${fromAddress}`);
+
   const info = await transporter.sendMail({
-    from: process.env.EMAIL_FROM || process.env.EMAIL_USER,
+    from: fromAddress,
     to: toEmail,
     subject: `You're invited to co-record: ${title}`,
-    text: `Hi ${toName},\n\nYou've been added as a co-recorder for "${title}".\n\nMeeting Passkey: ${passkey}\n\nGo to the app → Join Meeting → enter the passkey above.\n\n— AI MeetNote`,
+    text: `Hi ${toName},\n\nYou've been added as a co-recorder for "${title}".\n\nMeeting Passkey: ${passkey}\n\nGo to the app -> Join Meeting -> enter the passkey above.\n\n-- AI MeetNote`,
     html,
   });
 
-  console.log(`📧 Passkey email sent to ${toEmail} — MessageID: ${info.messageId}`);
+  console.log(`✅ Passkey email sent to ${toEmail} — MessageID: ${info.messageId}`);
   return info;
 }
 

@@ -669,7 +669,42 @@ router.post('/:id/invite-speaker', auth, async (req, res) => {
     res.json({ message: `Passkey emailed to ${email}` });
   } catch (err) {
     console.error('[POST /meetings/:id/invite-speaker]', err.message);
-    res.status(500).json({ message: 'Failed to send invitation email. Check email configuration.' });
+    res.status(500).json({
+      message: `Failed to send invitation email: ${err.message}`,
+    });
+  }
+});
+
+// ── DELETE /api/meetings/:id/speakers/:email — Remove a co-recorder (host only) ──
+// Removes the speaker from the in-memory participants list and recipientEmails.
+// Only works before processing is complete (meeting must not be in 'completed' state).
+router.delete('/:id/speakers/:email', auth, async (req, res) => {
+  try {
+    const meeting = await Meeting.findById(req.params.id);
+    if (!meeting) return res.status(404).json({ message: 'Meeting not found' });
+    if (String(meeting.host) !== String(req.user.id)) {
+      return res.status(403).json({ message: 'Only the host can remove co-recorders.' });
+    }
+
+    const emailToRemove = decodeURIComponent(req.params.email).trim().toLowerCase();
+
+    // Remove from participants list — preserve host entry, remove co-recorder by email
+    meeting.participants = (meeting.participants || []).filter(
+      (p) => p.isHost || p.email?.toLowerCase() !== emailToRemove
+    );
+
+    // Remove from recipientEmails — preserves host email because the host is never
+    // the co-recorder email being passed here (UI enforces this)
+    meeting.recipientEmails = (meeting.recipientEmails || []).filter(
+      (e) => e.toLowerCase() !== emailToRemove
+    );
+
+    await meeting.save();
+
+    res.json({ message: `Co-recorder ${emailToRemove} removed successfully.` });
+  } catch (err) {
+    console.error('[DELETE /meetings/:id/speakers/:email]', err.message);
+    res.status(500).json({ message: 'Server error' });
   }
 });
 

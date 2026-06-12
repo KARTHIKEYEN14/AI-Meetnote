@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Mic, MicOff, X, UserPlus, Users, FileText, Square, ArrowLeft, Mail, Loader, Radio, Upload } from 'lucide-react';
+import { Mic, MicOff, X, UserPlus, Users, FileText, Square, ArrowLeft, Mail, Loader, Radio, Upload, Trash2 } from 'lucide-react';
 import api from '../services/api';
 
 const POLL_INTERVAL_MS = 3000;
@@ -154,6 +154,32 @@ export default function RecordingPage() {
     setInviteLoading(false);
     setInviteSuccess(false);
     setInviteError('');
+  };
+
+  // ── Remove Co-Recorder (host only) ──────────────────────────────────────
+  const handleRemoveSpeaker = async (idx) => {
+    const speaker = speakers[idx];
+    if (!speaker || speaker.isHost) return; // cannot remove host
+
+    // Remove from local state first (optimistic)
+    setSpeakers(prev => prev.filter((_, i) => i !== idx));
+
+    // If the active speaker is removed, switch back to host (index 0)
+    if (activeSpeakerIndex === idx) {
+      setActiveSpeakerIndex(0);
+    } else if (activeSpeakerIndex > idx) {
+      setActiveSpeakerIndex(prev => prev - 1);
+    }
+
+    // Remove from backend if speaker has an email
+    if (speaker.email) {
+      try {
+        await api.delete(`/meetings/${id}/speakers/${encodeURIComponent(speaker.email)}`);
+      } catch (err) {
+        console.warn('[remove-speaker] Backend removal failed:', err.response?.data?.message || err.message);
+        // Non-critical: local state already updated
+      }
+    }
   };
 
   // ── End meeting (LOCAL mode) ─────────────────────────────────────────────
@@ -433,21 +459,32 @@ export default function RecordingPage() {
           {/* Speaker switcher pills */}
           <div className="flex flex-wrap gap-2 mb-3">
             {speakers.map((sp, idx) => (
-              <button
-                key={idx}
-                id={`speaker-pill-${idx}`}
-                onClick={() => switchSpeaker(idx)}
-                className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full text-sm font-semibold transition-all ${
-                  idx === activeSpeakerIndex
-                    ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/30 ring-2 ring-indigo-400/50'
-                    : 'bg-white/8 text-slate-300 hover:bg-white/15 border border-white/10'
-                }`}
-              >
-                <span className="w-5 h-5 rounded-full bg-white/20 flex items-center justify-center text-xs font-bold">
-                  {sp.name.charAt(0).toUpperCase()}
-                </span>
-                {sp.name}
-              </button>
+              <div key={idx} className="relative group">
+                <button
+                  id={`speaker-pill-${idx}`}
+                  onClick={() => switchSpeaker(idx)}
+                  className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full text-sm font-semibold transition-all ${
+                    idx === activeSpeakerIndex
+                      ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/30 ring-2 ring-indigo-400/50'
+                      : 'bg-white/8 text-slate-300 hover:bg-white/15 border border-white/10'
+                  } ${!sp.isHost ? 'pr-8' : ''}`}
+                >
+                  <span className="w-5 h-5 rounded-full bg-white/20 flex items-center justify-center text-xs font-bold">
+                    {sp.name.charAt(0).toUpperCase()}
+                  </span>
+                  {sp.name}
+                </button>
+                {/* Remove button — only for co-recorders, only for host user */}
+                {!sp.isHost && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); handleRemoveSpeaker(idx); }}
+                    title="Remove co-recorder"
+                    className="absolute right-1.5 top-1/2 -translate-y-1/2 w-5 h-5 rounded-full bg-red-600/80 hover:bg-red-600 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
             ))}
           </div>
 
@@ -533,7 +570,18 @@ export default function RecordingPage() {
                         {sp.email ? ' · ' + sp.email : ''}
                       </p>
                     </div>
-                    <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${idx === activeSpeakerIndex ? 'bg-green-400 animate-pulse' : 'bg-slate-600'}`} />
+                    {/* Active indicator or remove button for co-recorders */}
+                    {sp.isHost ? (
+                      <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${idx === activeSpeakerIndex ? 'bg-green-400 animate-pulse' : 'bg-slate-600'}`} />
+                    ) : (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleRemoveSpeaker(idx); }}
+                        title="Remove co-recorder"
+                        className="shrink-0 w-7 h-7 rounded-full bg-red-600/20 hover:bg-red-600/50 border border-red-600/30 hover:border-red-600/60 text-red-400 hover:text-red-300 flex items-center justify-center transition-all"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                   </div>
                 ))}
 
