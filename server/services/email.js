@@ -1,8 +1,13 @@
 const nodemailer = require('nodemailer');
 
 // Reusable transporter (created once at startup)
+// IMPORTANT: Use explicit host + port + family:4 instead of service:'gmail'
+// This forces IPv4 DNS resolution and avoids ENETUNREACH on IPv6-disabled networks.
 const transporter = nodemailer.createTransport({
-  service: 'gmail',
+  host: 'smtp.gmail.com',
+  port: 465,
+  secure: true,           // TLS on port 465
+  family: 4,              // force IPv4 — prevents ENETUNREACH on IPv6-disabled hosts
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS,
@@ -14,7 +19,7 @@ transporter.verify((err) => {
   if (err) {
     console.error('❌ Email transporter configuration error:', err.message);
   } else {
-    console.log('✅ Email transporter ready — using', process.env.EMAIL_USER);
+    console.log('✅ Email transporter ready (IPv4 · smtp.gmail.com:465) — using', process.env.EMAIL_USER);
   }
 });
 
