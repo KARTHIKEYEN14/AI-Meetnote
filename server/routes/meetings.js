@@ -72,15 +72,21 @@ async function buildDocxBuffer(meeting) {
       ],
     });
 
+  // Combine participants from both remote chunks and local participants list
+  const allParticipants = meeting.remoteMode && meeting.submittedChunks?.length
+    ? meeting.submittedChunks.map(c => ({ name: c.participantName, email: c.participantEmail }))
+    : (participants || []);
+
   const metaTable = new Table({
     width: { size: 100, type: WidthType.PERCENTAGE },
     rows: [
       metaRow('Date', date),
       metaRow('Duration', duration),
       metaRow('Agenda', agenda || ''),
+      metaRow('Recording Mode', meeting.remoteMode ? 'Remote (Distributed)' : 'Local'),
       metaRow(
         'Participants',
-        (participants || []).map((p) => `${p.name}${p.email ? ` <${p.email}>` : ''}`).join(', ') || 'N/A'
+        allParticipants.map((p) => `${p.name}${p.email ? ` <${p.email}>` : ''}`).join(', ') || 'N/A'
       ),
     ],
   });
@@ -151,10 +157,50 @@ async function buildDocxBuffer(meeting) {
   return Packer.toBuffer(doc);
 }
 
+// ── Trigger merge + AI summary after all chunks received ─────────────────────
+async function triggerRemoteMerge(meeting) {
+  try {
+    console.log(`[remote-merge] Merging ${meeting.submittedChunks.length} chunks for meeting ${meeting._id}…`);
+    meeting.status = 'processing';
+    await meeting.save();
+
+    // Build per-speaker transcripts from submitted chunks
+    const perSpeakerTranscripts = meeting.submittedChunks.map(c => ({
+      speakerName: c.participantName,
+      transcript: c.transcript,
+    }));
+
+    const mergedTranscript = perSpeakerTranscripts
+      .map(({ speakerName, transcript }) => `[${speakerName}]: ${transcript}`)
+      .join('\n\n');
+
+    meeting.perSpeakerTranscripts = perSpeakerTranscripts;
+    meeting.transcript = mergedTranscript;
+
+    // Build participants list from chunks
+    meeting.participants = meeting.submittedChunks.map(c => ({
+      name:   c.participantName,
+      email:  c.participantEmail,
+      isHost: c.isHost,
+    }));
+
+    console.log(`[remote-merge] Generating AI summary…`);
+    const summary = await generateSummary(mergedTranscript, meeting.agenda);
+    meeting.summary = summary;
+    meeting.status = 'completed';
+    await meeting.save();
+    console.log(`[remote-merge] ✅ Meeting ${meeting._id} completed.`);
+  } catch (err) {
+    console.error('[remote-merge] Error:', err.message);
+    meeting.status = 'failed';
+    await meeting.save();
+  }
+}
+
 // ── POST /api/meetings — Create a meeting ─────────────────────────────────────
 router.post('/', auth, async (req, res) => {
   try {
-    const { title, agenda, recipientEmails } = req.body;
+    const { title, agenda, recipientEmails, remoteMode, expectedParticipants } = req.body;
     if (!title) return res.status(400).json({ message: 'Title is required' });
 
     let emails = [];
@@ -173,12 +219,18 @@ router.post('/', auth, async (req, res) => {
       passkey = generatePasskey();
     }
 
+    const isRemote = remoteMode === true || remoteMode === 'true';
+    const expectedCount = isRemote ? (parseInt(expectedParticipants, 10) || 1) : 0;
+
     const meeting = new Meeting({
       title,
       agenda: agenda || '',
       passkey,
       host: req.user.id,
       recipientEmails: emails,
+      remoteMode: isRemote,
+      expectedParticipants: expectedCount,
+      status: isRemote ? 'waiting_for_participants' : 'scheduled',
     });
 
     await meeting.save();
@@ -244,6 +296,161 @@ router.get('/:id/status', auth, async (req, res) => {
     res.status(500).json({ message: 'Server error' });
   }
 });
+
+// ── GET /api/meetings/:id/chunk-status — Remote recording progress ────────────
+// Returns how many chunks received vs expected (for host polling)
+router.get('/:id/chunk-status', auth, async (req, res) => {
+  try {
+    const meeting = await Meeting.findById(req.params.id)
+      .select('status chunksReceived expectedParticipants remoteMode submittedChunks');
+    if (!meeting) return res.status(404).json({ message: 'Meeting not found' });
+
+    const submitters = (meeting.submittedChunks || []).map(c => ({
+      name:  c.participantName,
+      email: c.participantEmail,
+      isHost: c.isHost,
+      submittedAt: c.submittedAt,
+    }));
+
+    res.json({
+      remoteMode:           meeting.remoteMode,
+      chunksReceived:       meeting.chunksReceived,
+      expectedParticipants: meeting.expectedParticipants,
+      status:               meeting.status,
+      submitters,
+    });
+  } catch (err) {
+    console.error('[GET /meetings/:id/chunk-status]', err.message);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ── POST /api/meetings/:id/start-remote — Host activates remote mode ──────────
+// Can also update expectedParticipants count on an existing meeting
+router.post('/:id/start-remote', auth, async (req, res) => {
+  try {
+    const { expectedParticipants } = req.body;
+    const meeting = await Meeting.findById(req.params.id);
+    if (!meeting) return res.status(404).json({ message: 'Meeting not found' });
+    if (String(meeting.host) !== String(req.user.id)) {
+      return res.status(403).json({ message: 'Only the host can enable remote recording.' });
+    }
+
+    meeting.remoteMode = true;
+    meeting.expectedParticipants = parseInt(expectedParticipants, 10) || 1;
+    meeting.status = 'waiting_for_participants';
+    await meeting.save();
+
+    res.json({
+      message: 'Remote recording mode activated.',
+      passkey: meeting.passkey,
+      expectedParticipants: meeting.expectedParticipants,
+    });
+  } catch (err) {
+    console.error('[POST /meetings/:id/start-remote]', err.message);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ── POST /api/meetings/:id/submit-chunk — Participant submits their audio ─────
+// Any logged-in user who knows the passkey can submit.
+// Guards: one submission per user, meeting must be in remote mode.
+router.post(
+  '/:id/submit-chunk',
+  auth,
+  upload.single('audio'),
+  async (req, res) => {
+    const audioPath = req.file?.path;
+    try {
+      const meeting = await Meeting.findById(req.params.id);
+      if (!meeting) {
+        cleanupFile(audioPath);
+        return res.status(404).json({ message: 'Meeting not found' });
+      }
+
+      if (!meeting.remoteMode) {
+        cleanupFile(audioPath);
+        return res.status(400).json({ message: 'This meeting is not in remote recording mode.' });
+      }
+
+      if (!['waiting_for_participants', 'recording'].includes(meeting.status)) {
+        cleanupFile(audioPath);
+        return res.status(400).json({ message: `Meeting status is "${meeting.status}" — cannot accept more chunks.` });
+      }
+
+      // Guard: one submission per user
+      const alreadySubmitted = meeting.submittedChunks.some(
+        c => String(c.participantId) === String(req.user.id)
+      );
+      if (alreadySubmitted) {
+        cleanupFile(audioPath);
+        return res.status(409).json({ message: 'You have already submitted your recording for this meeting.' });
+      }
+
+      if (!audioPath) {
+        return res.status(400).json({ message: 'No audio file received.' });
+      }
+
+      const isHost = String(meeting.host) === String(req.user.id);
+      const participantName  = req.body.participantName  || req.user.name  || req.user.email?.split('@')[0] || 'Unknown';
+      const participantEmail = req.body.participantEmail || req.user.email || '';
+
+      // Add participant email to recipient list if not already there
+      if (participantEmail && !meeting.recipientEmails.includes(participantEmail)) {
+        meeting.recipientEmails.push(participantEmail);
+      }
+
+      // Set startedAt on first chunk
+      if (!meeting.startedAt) {
+        meeting.startedAt = req.body.startedAt ? new Date(req.body.startedAt) : new Date();
+      }
+
+      await meeting.save();
+
+      // Respond immediately — transcription runs in background
+      res.json({ message: 'Audio received. Transcribing in background…', isHost });
+
+      // ── Background: transcribe + check if merge is needed ─────────────────
+      (async () => {
+        try {
+          console.log(`[submit-chunk] Transcribing audio for "${participantName}"…`);
+          const transcript = await transcribeAudio(audioPath);
+
+          // Atomically push the chunk and increment counter
+          await Meeting.findByIdAndUpdate(meeting._id, {
+            $push: {
+              submittedChunks: {
+                participantId:    req.user.id,
+                participantName,
+                participantEmail,
+                isHost,
+                transcript,
+                submittedAt: new Date(),
+              },
+            },
+            $inc: { chunksReceived: 1 },
+          });
+
+          const updated = await Meeting.findById(meeting._id);
+          console.log(`[submit-chunk] Chunk saved. ${updated.chunksReceived}/${updated.expectedParticipants} received.`);
+
+          // If all chunks are in → trigger merge
+          if (updated.chunksReceived >= updated.expectedParticipants) {
+            await triggerRemoteMerge(updated);
+          }
+        } catch (err) {
+          console.error('[submit-chunk] Background error:', err.message);
+        } finally {
+          cleanupFile(audioPath);
+        }
+      })();
+    } catch (err) {
+      console.error('[POST /meetings/:id/submit-chunk]', err.message);
+      cleanupFile(audioPath);
+      res.status(500).json({ message: 'Server error' });
+    }
+  }
+);
 
 // ── POST /api/meetings/:id/process — Single-audio upload (legacy) ─────────────
 router.post('/:id/process', auth, upload.single('audio'), async (req, res) => {

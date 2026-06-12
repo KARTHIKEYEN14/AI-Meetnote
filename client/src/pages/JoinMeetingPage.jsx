@@ -5,7 +5,7 @@ import api from '../services/api';
 
 export default function JoinMeetingPage() {
   const [passkey, setPasskey] = useState('');
-  const [error, setError] = useState('');
+  const [error, setError]     = useState('');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
@@ -19,12 +19,21 @@ export default function JoinMeetingPage() {
       });
 
       localStorage.setItem('currentMeetingInfo', JSON.stringify({
-        title: meeting.title,
-        passkey: meeting.passkey,
-        isJoined: true,
+        title:               meeting.title,
+        passkey:             meeting.passkey,
+        agenda:              meeting.agenda || '',
+        isJoined:            true,
+        remoteMode:          meeting.remoteMode || false,
+        expectedParticipants: meeting.expectedParticipants || 0,
       }));
 
-      navigate(`/meeting/record/${meeting._id}`);
+      if (meeting.remoteMode) {
+        // Remote session → participant records on their own device
+        navigate(`/meeting/participant-record/${meeting._id}`);
+      } else {
+        // Classic local mode → existing multi-speaker recording room
+        navigate(`/meeting/record/${meeting._id}`);
+      }
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to join meeting. Check the passkey.');
     } finally {
@@ -77,6 +86,7 @@ export default function JoinMeetingPage() {
 
             <button
               type="submit"
+              id="join-btn"
               disabled={loading}
               className="w-full flex justify-center items-center gap-2 py-4 px-4 font-bold rounded-full shadow-lg shadow-indigo-500/25 text-white bg-gradient-to-r from-indigo-600 to-blue-500 hover:from-indigo-700 hover:to-blue-600 transition-all text-lg disabled:opacity-60 disabled:cursor-not-allowed"
             >

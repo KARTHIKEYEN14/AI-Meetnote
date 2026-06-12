@@ -4,7 +4,7 @@ import {
   ArrowLeft, CheckCircle2, Target, Lightbulb,
   Loader, AlertCircle, FileDown, RefreshCw,
   Calendar, Clock, Timer, User2, Users2,
-  MessageSquare, ShieldCheck, Download
+  MessageSquare, ShieldCheck, Download, Radio, ChevronDown
 } from 'lucide-react';
 import api from '../services/api';
 
@@ -185,6 +185,14 @@ export default function SummaryPage() {
           </div>
         </div>
 
+        {/* ── Remote session badge ────────────────────────────────────────── */}
+        {meeting.remoteMode && (
+          <div className="flex items-center gap-2 px-4 py-3 bg-violet-500/10 border border-violet-500/30 rounded-2xl mb-4 text-sm text-violet-300">
+            <Radio className="w-4 h-4 shrink-0" />
+            <span><strong>Remote Session</strong> — {meeting.submittedChunks?.length || 0} participant recording{(meeting.submittedChunks?.length || 0) !== 1 ? 's' : ''} merged into this summary.</span>
+          </div>
+        )}
+
         {/* ── Editable banner ────────────────────────────────────────────── */}
         <div className="flex items-center gap-2 px-4 py-3 bg-amber-500/10 border border-amber-500/30 rounded-2xl mb-6 text-sm text-amber-300">
           <span>✏️</span>
@@ -259,6 +267,23 @@ export default function SummaryPage() {
             )}
           </SectionCard>
         </div>
+
+        {/* ── Per-speaker transcripts (remote mode) ──────────────────────── */}
+        {meeting.remoteMode && meeting.submittedChunks?.length > 0 && (
+          <div className="mt-5">
+            <SectionCard
+              title="Per-Speaker Transcripts"
+              icon={<Radio className="w-5 h-5 text-violet-400" />}
+              color="violet"
+            >
+              <div className="space-y-2">
+                {meeting.submittedChunks.map((chunk, i) => (
+                  <TranscriptAccordion key={i} chunk={chunk} />
+                ))}
+              </div>
+            </SectionCard>
+          </div>
+        )}
 
         {/* ── Approval section ───────────────────────────────────────────── */}
         <div className="mt-6 bg-[#1e293b] rounded-3xl border border-white/10 p-6">
@@ -373,8 +398,9 @@ function MetaCard({ icon, label, value }) {
 function SectionCard({ title, icon, color, children }) {
   const colorMap = {
     yellow: 'border-yellow-500/20',
-    blue: 'border-blue-500/20',
-    teal: 'border-teal-500/20',
+    blue:   'border-blue-500/20',
+    teal:   'border-teal-500/20',
+    violet: 'border-violet-500/20',
   };
   return (
     <div className={`bg-[#1e293b] rounded-3xl border ${colorMap[color] || 'border-white/10'} p-5`}>
@@ -383,6 +409,34 @@ function SectionCard({ title, icon, color, children }) {
         <h2 className="text-sm font-bold text-slate-300 uppercase tracking-widest">{title}</h2>
       </div>
       {children}
+    </div>
+  );
+}
+
+function TranscriptAccordion({ chunk }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="bg-white/5 border border-white/8 rounded-2xl overflow-hidden">
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center justify-between px-4 py-3 text-sm font-semibold text-white hover:bg-white/5 transition-colors"
+      >
+        <div className="flex items-center gap-2">
+          <span className="w-7 h-7 rounded-full bg-gradient-to-br from-violet-500 to-indigo-500 flex items-center justify-center text-xs font-bold text-white shrink-0">
+            {chunk.participantName?.charAt(0).toUpperCase()}
+          </span>
+          <span>{chunk.participantName}</span>
+          {chunk.isHost && <span className="text-xs text-indigo-400 font-normal">(Host)</span>}
+        </div>
+        <ChevronDown className={`w-4 h-4 text-slate-500 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="px-4 pb-4">
+          <p className="text-slate-400 text-sm leading-relaxed whitespace-pre-wrap">
+            {chunk.transcript || '(No transcript available)'}
+          </p>
+        </div>
+      )}
     </div>
   );
 }

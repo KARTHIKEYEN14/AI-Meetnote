@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Mic, MicOff, X, UserPlus, Users, FileText, Square, ArrowLeft, Mail, Loader } from 'lucide-react';
+import { Mic, MicOff, X, UserPlus, Users, FileText, Square, ArrowLeft, Mail, Loader, Radio, Upload } from 'lucide-react';
 import api from '../services/api';
 
 const POLL_INTERVAL_MS = 3000;
@@ -11,9 +11,11 @@ export default function RecordingPage() {
 
   // ── Meeting info ────────────────────────────────────────────────────────────
   const currentInfo = JSON.parse(localStorage.getItem('currentMeetingInfo') || '{}');
-  const meetingTitle = currentInfo.title || `Meeting ${id}`;
+  const meetingTitle  = currentInfo.title  || `Meeting ${id}`;
   const meetingAgenda = currentInfo.agenda || '';
-  const passkey = currentInfo.passkey || ''; // kept private — not displayed in UI
+  const passkey       = currentInfo.passkey || ''; // kept private — not displayed in UI
+  const remoteMode    = currentInfo.remoteMode === true;
+  const expectedParts = currentInfo.expectedParticipants || 0;
 
   // ── Speakers / participants ─────────────────────────────────────────────────
   const hostUser = JSON.parse(localStorage.getItem('user') || '{}');
@@ -40,6 +42,8 @@ export default function RecordingPage() {
   const [timer, setTimer] = useState(0);
   const [isEnding, setIsEnding] = useState(false);
   const [showBackConfirm, setShowBackConfirm] = useState(false);
+  const [chunkStatus, setChunkStatus] = useState(null); // remote mode progress
+  const [submitted, setSubmitted] = useState(false);    // remote: chunk uploaded
 
   // ── Audio refs ──────────────────────────────────────────────────────────────
   const audioChunksRef = useRef([]);
@@ -152,7 +156,7 @@ export default function RecordingPage() {
     setInviteError('');
   };
 
-  // ── End meeting ──────────────────────────────────────────────────────────
+  // ── End meeting (LOCAL mode) ─────────────────────────────────────────────
   const handleEndMeeting = async () => {
     if (isEnding) return;
     setIsEnding(true);
@@ -211,6 +215,60 @@ export default function RecordingPage() {
     }
   };
 
+  // ── Submit host chunk (REMOTE mode) ─────────────────────────────────────
+  const handleSubmitRemoteChunk = async () => {
+    if (isEnding) return;
+    setIsEnding(true);
+    await stopCurrentChunk();
+    clearInterval(timerRef.current);
+
+    const chunks = completedChunksRef.current;
+    if (chunks.length === 0) {
+      setError('No audio was recorded.');
+      setIsEnding(false);
+      return;
+    }
+
+    setIsProcessing(true);
+    setProcessingStatus('Uploading your recording…');
+
+    try {
+      // Merge all local chunks into one blob
+      const allBlobs = chunks.map(c => c.blob);
+      const merged   = new Blob(allBlobs, { type: 'audio/webm' });
+
+      const formData = new FormData();
+      formData.append('audio', merged, 'host_recording.webm');
+      formData.append('participantName', hostName);
+      formData.append('participantEmail', hostEmail);
+      formData.append('startedAt', startedAtRef.current?.toISOString() || new Date().toISOString());
+
+      await api.post(`/meetings/${id}/submit-chunk`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+
+      setSubmitted(true);
+      setIsProcessing(false);
+      setIsEnding(false);
+
+      // Poll until all chunks received and summary ready
+      pollRef.current = setInterval(async () => {
+        try {
+          const { data } = await api.get(`/meetings/${id}/chunk-status`);
+          setChunkStatus(data);
+          if (data.status === 'completed') {
+            clearInterval(pollRef.current);
+            navigate(`/meeting/summary/${id}`);
+          }
+        } catch (_) {}
+      }, POLL_INTERVAL_MS);
+    } catch (err) {
+      setIsProcessing(false);
+      setIsEnding(false);
+      setError(err.response?.data?.message || 'Upload failed. Please try again.');
+    }
+  };
+
   // ── Auto-start on mount ──────────────────────────────────────────────────
   useEffect(() => {
     startedAtRef.current = new Date();
@@ -239,6 +297,49 @@ export default function RecordingPage() {
     );
   }
 
+  // ── Submitted banner (remote host waiting for others) ────────────────────
+  if (submitted) {
+    return (
+      <div className="flex-1 bg-[#0d1117] flex flex-col items-center justify-center p-8 text-center min-h-screen">
+        <div className="w-20 h-20 rounded-full bg-green-500/15 border border-green-500/30 flex items-center justify-center mb-6">
+          <Upload className="w-10 h-10 text-green-400" />
+        </div>
+        <h2 className="text-2xl font-bold text-white mb-2">Your Recording Submitted!</h2>
+        <p className="text-slate-400 max-w-sm mb-6">Waiting for all participants to submit their recordings before AI generates the summary.</p>
+        {chunkStatus && (
+          <div className="bg-[#1e293b] border border-white/10 rounded-2xl px-8 py-5 mb-6">
+            <p className="text-xs text-slate-500 uppercase tracking-widest font-semibold mb-2">Session Progress</p>
+            <div className="flex items-center justify-center gap-2 mb-3">
+              <span className="text-4xl font-black text-violet-400 tabular-nums">{chunkStatus.chunksReceived}</span>
+              <span className="text-slate-500 font-bold text-2xl">/</span>
+              <span className="text-4xl font-black text-slate-400 tabular-nums">{chunkStatus.expectedParticipants}</span>
+            </div>
+            <div className="h-2 bg-white/10 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-violet-500 to-indigo-500 rounded-full transition-all duration-700"
+                style={{ width: `${Math.min(100,(chunkStatus.chunksReceived/chunkStatus.expectedParticipants)*100)}%` }}
+              />
+            </div>
+            {chunkStatus.submitters?.length > 0 && (
+              <div className="mt-3 space-y-1 text-left">
+                {chunkStatus.submitters.map((s, i) => (
+                  <div key={i} className="flex items-center gap-2 text-xs text-slate-400">
+                    <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
+                    {s.name}{s.isHost ? ' (You — Host)' : ''}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+        <div className="flex items-center gap-2 text-slate-500 text-sm animate-pulse">
+          <Loader className="w-4 h-4 animate-spin" />
+          Waiting for others…
+        </div>
+      </div>
+    );
+  }
+
   // ── Main recording UI ────────────────────────────────────────────────────
   return (
     <div className="flex-1 flex flex-col bg-[#0d1117] text-white overflow-hidden" style={{ minHeight: '100vh' }}>
@@ -262,21 +363,40 @@ export default function RecordingPage() {
         </div>
 
         <div className="flex items-center gap-3 shrink-0">
+          {/* Remote mode badge */}
+          {remoteMode && (
+            <span className="flex items-center gap-1.5 px-3 py-1.5 bg-violet-600/20 border border-violet-500/30 text-violet-300 rounded-full text-xs font-bold">
+              <Radio className="w-3 h-3" /> Host · Remote
+            </span>
+          )}
+
           {/* Timer */}
           <span className="bg-white/10 text-white font-mono font-bold text-sm px-3 py-1.5 rounded-full tabular-nums">
             {formatTime(timer)}
           </span>
 
-          {/* End button */}
-          <button
-            id="end-meeting-btn"
-            onClick={handleEndMeeting}
-            disabled={isEnding}
-            className="recording-end-btn flex items-center gap-2 px-4 py-1.5 bg-red-600 hover:bg-red-700 text-white text-sm font-bold rounded-full transition-all disabled:opacity-50"
-          >
-            <Square className="w-3.5 h-3.5 fill-white" />
-            <span>End Meeting</span>
-          </button>
+          {/* End / Submit button */}
+          {remoteMode ? (
+            <button
+              id="end-meeting-btn"
+              onClick={handleSubmitRemoteChunk}
+              disabled={isEnding}
+              className="recording-end-btn flex items-center gap-2 px-4 py-1.5 bg-violet-600 hover:bg-violet-700 text-white text-sm font-bold rounded-full transition-all disabled:opacity-50"
+            >
+              <Upload className="w-3.5 h-3.5" />
+              <span>Submit My Recording</span>
+            </button>
+          ) : (
+            <button
+              id="end-meeting-btn"
+              onClick={handleEndMeeting}
+              disabled={isEnding}
+              className="recording-end-btn flex items-center gap-2 px-4 py-1.5 bg-red-600 hover:bg-red-700 text-white text-sm font-bold rounded-full transition-all disabled:opacity-50"
+            >
+              <Square className="w-3.5 h-3.5 fill-white" />
+              <span>End Meeting</span>
+            </button>
+          )}
         </div>
       </div>
 

@@ -17,6 +17,16 @@ const perSpeakerTranscriptSchema = new mongoose.Schema({
   transcript:  { type: String, default: '' },
 });
 
+// ── Remote recording: one entry per participant who uploaded their audio chunk ─
+const submittedChunkSchema = new mongoose.Schema({
+  participantId:    { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  participantName:  { type: String, default: '' },
+  participantEmail: { type: String, default: '' },
+  isHost:           { type: Boolean, default: false },
+  transcript:       { type: String, default: '' },
+  submittedAt:      { type: Date, default: Date.now },
+});
+
 const meetingSchema = new mongoose.Schema(
   {
     title:           { type: String, required: true },
@@ -25,7 +35,7 @@ const meetingSchema = new mongoose.Schema(
     host:            { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     status:          {
       type: String,
-      enum: ['scheduled', 'recording', 'processing', 'completed', 'failed'],
+      enum: ['scheduled', 'recording', 'waiting_for_participants', 'processing', 'completed', 'failed'],
       default: 'scheduled',
     },
 
@@ -53,6 +63,19 @@ const meetingSchema = new mongoose.Schema(
 
     // Whether the host has approved the summary for distribution
     hostApproved: { type: Boolean, default: false },
+
+    // ── Remote recording fields ───────────────────────────────────────────────
+    // true = participants record from their own devices
+    remoteMode: { type: Boolean, default: false },
+
+    // How many total recordings the host expects (including their own)
+    expectedParticipants: { type: Number, default: 0 },
+
+    // Each submitted audio chunk (transcribed server-side)
+    submittedChunks: { type: [submittedChunkSchema], default: [] },
+
+    // Convenience counter — incremented atomically when a chunk arrives
+    chunksReceived: { type: Number, default: 0 },
   },
   { timestamps: true }
 );

@@ -9,6 +9,7 @@ import CreateMeetingPage from './pages/CreateMeetingPage';
 import JoinMeetingPage from './pages/JoinMeetingPage';
 import RecordingPage from './pages/RecordingPage';
 import SummaryPage from './pages/SummaryPage';
+import ParticipantRecordPage from './pages/ParticipantRecordPage';
 import ProtectedRoute from './components/ProtectedRoute';
 
 // Pages that don't need the sidebar (full-screen experience)
@@ -32,6 +33,7 @@ function AppShell() {
           <Route path="/meeting/create" element={<ProtectedRoute><CreateMeetingPage /></ProtectedRoute>} />
           <Route path="/meeting/join" element={<ProtectedRoute><JoinMeetingPage /></ProtectedRoute>} />
           <Route path="/meeting/record/:id" element={<ProtectedRoute><RecordingPage /></ProtectedRoute>} />
+          <Route path="/meeting/participant-record/:id" element={<ProtectedRoute><ParticipantRecordPage /></ProtectedRoute>} />
           <Route path="/meeting/summary/:id" element={<ProtectedRoute><SummaryPage /></ProtectedRoute>} />
 
           {/* Fallback */}
