@@ -37,71 +37,42 @@ app.use('/api/meetings', meetingRoutes);
 app.get('/api/health', (_, res) => res.json({ status: 'ok' }));
 
 // ── Email diagnostic — GET /api/health/email?to=you@example.com ───────────────
-// Tries to send a test email and returns the full SMTP result / error.
-// Use this to debug email issues on Render without touching the main app flow.
+// Tests the Resend HTTP API connection (no SMTP sockets needed).
 app.get('/api/health/email', async (req, res) => {
-  const nodemailer = require('nodemailer');
-  const to = req.query.to || process.env.EMAIL_USER;
-  const user = process.env.EMAIL_USER;
-  const pass = process.env.EMAIL_PASS;
+  const { Resend } = require('resend');
+  const apiKey = process.env.RESEND_API_KEY;
+  const to     = req.query.to || process.env.EMAIL_USER || 'test@example.com';
 
-  if (!user || !pass) {
-    return res.status(500).json({ ok: false, error: 'EMAIL_USER or EMAIL_PASS not set in env' });
+  if (!apiKey) {
+    return res.status(500).json({
+      ok:    false,
+      error: 'RESEND_API_KEY is not set in environment variables.',
+      hint:  'Sign up at https://resend.com → API Keys → Create API Key → add to Render env vars as RESEND_API_KEY',
+    });
   }
 
-  // Try port 587 first, then 465 as fallback
-  const configs = [
-    { port: 587, secure: false, label: 'port-587-STARTTLS' },
-    { port: 465, secure: true,  label: 'port-465-SSL'      },
-  ];
+  try {
+    const resend = new Resend(apiKey);
+    const from   = process.env.RESEND_FROM || 'AI MeetNote <onboarding@resend.dev>';
 
-  const results = [];
-
-  for (const cfg of configs) {
-    const transporter = nodemailer.createTransport({
-      host:   'smtp.gmail.com',
-      port:   cfg.port,
-      secure: cfg.secure,
-      family: 4,
-      auth:   { user, pass },
-      connectionTimeout: 10000,
-      greetingTimeout:   10000,
-      socketTimeout:     15000,
-      tls: { rejectUnauthorized: false },
-      logger: true,
-      debug:  true,
+    const { data, error } = await resend.emails.send({
+      from,
+      to:      [to],
+      subject: '✅ AI MeetNote email test (Resend)',
+      text:    `Resend HTTP API is working correctly. Sent at ${new Date().toISOString()}`,
     });
 
-    try {
-      // 1. Verify connection
-      await transporter.verify();
-
-      // 2. Send actual test mail
-      const info = await transporter.sendMail({
-        from:    user,
-        to,
-        subject: `✅ AI MeetNote SMTP test (${cfg.label})`,
-        text:    `SMTP is working via ${cfg.label}. Sent at ${new Date().toISOString()}`,
-      });
-
-      results.push({ config: cfg.label, ok: true, messageId: info.messageId });
-      console.log(`[health/email] ✅ ${cfg.label} SUCCESS — MessageID: ${info.messageId}`);
-
-      // If one config works, no need to try the other
-      return res.json({
-        ok: true,
-        workingConfig: cfg.label,
-        to,
-        results,
-      });
-    } catch (err) {
-      console.error(`[health/email] ❌ ${cfg.label} FAILED:`, err.message, err.code);
-      results.push({ config: cfg.label, ok: false, error: err.message, code: err.code });
+    if (error) {
+      console.error('[health/email] Resend error:', error);
+      return res.status(500).json({ ok: false, error: error.message || JSON.stringify(error), apiKey: `${apiKey.slice(0, 8)}…` });
     }
-  }
 
-  // Both configs failed
-  res.status(500).json({ ok: false, to, results });
+    console.log(`[health/email] ✅ Resend test email sent — ID: ${data.id}`);
+    res.json({ ok: true, to, from, resendId: data.id });
+  } catch (err) {
+    console.error('[health/email] Exception:', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
 });
 
 // ── Global error handler ──────────────────────────────────────────────────────

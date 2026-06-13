@@ -1,39 +1,45 @@
-const nodemailer = require('nodemailer');
-
 /**
- * Create a fresh transporter on every send call.
+ * email.js — AI MeetNote email service via Resend HTTP API
  *
- * WHY port 587 (STARTTLS) instead of 465 (SSL)?
- * Cloud providers like Render, Heroku, Railway, and AWS block outbound port 465
- * at the network level. Port 587 with STARTTLS is the modern standard and is
- * almost always allowed on cloud infrastructure.
+ * WHY Resend instead of Gmail SMTP?
+ * Render (and most cloud providers) block all outbound SMTP ports (465 & 587)
+ * at the network/firewall level to prevent spam. Resend uses a plain HTTPS
+ * REST call — no special ports needed, works everywhere.
+ *
+ * Setup (one-time):
+ *   1. Sign up free at https://resend.com  (3,000 emails/month free)
+ *   2. Go to API Keys → Create API Key → copy it
+ *   3. Add to Render env vars:  RESEND_API_KEY=re_xxxxxxxx
+ *   4. (Optional) Verify your domain in Resend and set:
+ *        RESEND_FROM=AI MeetNote <noreply@yourdomain.com>
+ *      Without a verified domain the default sender is used.
  */
-function createTransporter() {
-  const user = process.env.EMAIL_USER;
-  const pass = process.env.EMAIL_PASS;
 
-  if (!user || !pass) {
+const { Resend } = require('resend');
+
+/** Lazily create Resend client — reads API key fresh each call */
+function getResendClient() {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) {
     throw new Error(
-      'Email credentials missing — set EMAIL_USER and EMAIL_PASS (no spaces) in Render env vars'
+      'RESEND_API_KEY is not set. ' +
+      'Sign up at https://resend.com, create an API key, ' +
+      'then add RESEND_API_KEY to your Render environment variables.'
     );
   }
-
-  return nodemailer.createTransport({
-    host:   'smtp.gmail.com',
-    port:   587,          // STARTTLS — works on Render/Heroku/AWS (465 is often blocked)
-    secure: false,        // false = STARTTLS upgrade after connect (not SSL-on-connect)
-    family: 4,            // force IPv4 — prevents ENETUNREACH on IPv6-disabled hosts
-    auth:   { user, pass },
-    connectionTimeout: 10000, // 10 s — bail early if host is unreachable
-    greetingTimeout:   10000,
-    socketTimeout:     15000,
-    tls: {
-      rejectUnauthorized: false, // allow self-signed certs on corporate proxies
-    },
-    logger:  true,  // pipe SMTP conversation to console — visible in Render logs
-    debug:   true,  // full SMTP debug output
-  });
+  return new Resend(apiKey);
 }
+
+/**
+ * Resolve the "from" address.
+ * Priority: RESEND_FROM env var → fallback to Resend shared sender.
+ * The shared sender (onboarding@resend.dev) works without domain verification.
+ */
+function getFromAddress() {
+  return process.env.RESEND_FROM || 'AI MeetNote <onboarding@resend.dev>';
+}
+
+// ── Email body builders ────────────────────────────────────────────────────────
 
 /**
  * Format the meeting summary as a clean plain-text email body.
@@ -84,21 +90,26 @@ function buildEmailHtml(meeting) {
     ? new Date(createdAt).toLocaleString('en-IN', { dateStyle: 'long', timeStyle: 'short' })
     : 'N/A';
 
-  const kp = summary.keyPoints.map((p) => `<li>${p}</li>`).join('') || '<li>None recorded</li>';
+  const kp  = summary.keyPoints.map((p) => `<li>${p}</li>`).join('') || '<li>None recorded</li>';
   const dec = summary.decisions.map((d) => `<li>${d}</li>`).join('') || '<li>None recorded</li>';
-  const ai = summary.actionItems
+  const ai  = summary.actionItems
     .map(
       (a) =>
         `<tr>
           <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0">${a.task}</td>
           <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0">${a.assignee}</td>
-          <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;color:${a.status === 'completed' ? '#16a34a' : '#d97706'}">${a.status}</td>
+          <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;color:${
+            a.status === 'completed' ? '#16a34a' : '#d97706'
+          }">${a.status}</td>
         </tr>`
     )
     .join('');
 
   const participantList = (participants || [])
-    .map((p) => `<span style="display:inline-block;background:#e0e7ff;color:#3730a3;border-radius:999px;padding:3px 12px;font-size:13px;margin:2px">${p.name}</span>`)
+    .map(
+      (p) =>
+        `<span style="display:inline-block;background:#e0e7ff;color:#3730a3;border-radius:999px;padding:3px 12px;font-size:13px;margin:2px">${p.name}</span>`
+    )
     .join(' ');
 
   return `
@@ -112,7 +123,10 @@ function buildEmailHtml(meeting) {
       <p style="color:rgba(255,255,255,.8);margin:8px 0 0">${title}</p>
     </div>
     <div style="padding:32px">
-      <p style="color:#64748b;margin:0 0 24px"><strong>Date:</strong> ${date}${agenda ? `&nbsp;&nbsp;|&nbsp;&nbsp;<strong>Agenda:</strong> ${agenda}` : ''}</p>
+      <p style="color:#64748b;margin:0 0 24px">
+        <strong>Date:</strong> ${date}
+        ${agenda ? `&nbsp;&nbsp;|&nbsp;&nbsp;<strong>Agenda:</strong> ${agenda}` : ''}
+      </p>
 
       ${participantList ? `<p style="margin:0 0 24px"><strong>Participants:</strong><br/>${participantList}</p>` : ''}
 
@@ -136,59 +150,68 @@ function buildEmailHtml(meeting) {
           : '<p style="color:#94a3b8">None recorded</p>'
       }
 
-      <p style="margin-top:32px;font-size:12px;color:#94a3b8;text-align:center">Approved &amp; sent by AI MeetNote • Powered by Groq AI</p>
+      <p style="margin-top:32px;font-size:12px;color:#94a3b8;text-align:center">
+        Approved &amp; sent by AI MeetNote • Powered by Groq AI
+      </p>
     </div>
   </div>
 </body>
 </html>`;
 }
 
+// ── Public send functions ──────────────────────────────────────────────────────
+
 /**
- * Send the meeting summary email to all recipients WITH .docx attachment.
- * @param {string[]} recipients   - Array of email addresses.
- * @param {object}  meeting       - Mongoose Meeting document.
- * @param {Buffer}  docxBuffer    - The .docx file buffer to attach (optional).
+ * Send the meeting summary email to all recipients WITH optional .docx attachment.
+ * @param {string[]} recipients  - Array of email addresses.
+ * @param {object}   meeting     - Mongoose Meeting document.
+ * @param {Buffer}   docxBuffer  - The .docx file buffer to attach (optional).
  */
 async function sendSummaryEmail(recipients, meeting, docxBuffer) {
   if (!recipients || recipients.length === 0) return;
 
-  const transporter = createTransporter();
+  const resend = getResendClient();
 
-  const mailOptions = {
-    from:    process.env.EMAIL_FROM || process.env.EMAIL_USER,
-    to:      recipients.join(', '),
-    subject: `Meeting Summary: ${meeting.title}`,
-    text:    buildEmailBody(meeting),
-    html:    buildEmailHtml(meeting),
-  };
-
-  // Attach the .docx if provided
+  const attachments = [];
   if (docxBuffer) {
     const safeTitle = meeting.title.replace(/[^a-z0-9]/gi, '_').toLowerCase();
-    mailOptions.attachments = [
-      {
-        filename: `${safeTitle}_minutes.docx`,
-        content:  docxBuffer,
-        contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      },
-    ];
+    // Resend expects base64-encoded content
+    attachments.push({
+      filename: `${safeTitle}_minutes.docx`,
+      content:  docxBuffer.toString('base64'),
+    });
   }
 
-  const info = await transporter.sendMail(mailOptions);
-  console.log(`📧 Summary email sent to [${recipients.join(', ')}] — MessageID: ${info.messageId}`);
-  return info;
+  console.log(`[sendSummaryEmail] Sending to: ${recipients.join(', ')}`);
+
+  const { data, error } = await resend.emails.send({
+    from:     getFromAddress(),
+    reply_to: process.env.EMAIL_USER || undefined,  // replies go back to host's Gmail
+    to:       recipients,
+    subject:  `Meeting Summary: ${meeting.title}`,
+    text:     buildEmailBody(meeting),
+    html:     buildEmailHtml(meeting),
+    attachments,
+  });
+
+  if (error) {
+    console.error('[sendSummaryEmail] Resend error:', error);
+    throw new Error(`Resend API error: ${error.message || JSON.stringify(error)}`);
+  }
+
+  console.log(`📧 Summary email sent to [${recipients.join(', ')}] — Resend ID: ${data.id}`);
+  return data;
 }
 
 /**
  * Send the meeting passkey to a co-recorder so they can join the meeting.
- * @param {string} toEmail   - Recipient email address.
- * @param {string} toName    - Recipient name (for personalisation).
- * @param {object} meeting   - Mongoose Meeting document.
+ * @param {string} toEmail  - Recipient email address.
+ * @param {string} toName   - Recipient name (for personalisation).
+ * @param {object} meeting  - Mongoose Meeting document.
  */
 async function sendPasskeyEmail(toEmail, toName, meeting) {
   const { title, agenda, passkey } = meeting;
-
-  const transporter = createTransporter(); // will throw if credentials missing
+  const resend = getResendClient();
 
   const html = `
 <!DOCTYPE html>
@@ -197,7 +220,7 @@ async function sendPasskeyEmail(toEmail, toName, meeting) {
 <body style="font-family:Inter,sans-serif;background:#f8fafc;padding:32px;margin:0">
   <div style="max-width:520px;margin:auto;background:#fff;border-radius:20px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,.08)">
     <div style="background:linear-gradient(135deg,#4f46e5,#3b82f6);padding:32px">
-      <h1 style="color:#fff;margin:0;font-size:20px">&#127897;&#65039; You've been invited to record</h1>
+      <h1 style="color:#fff;margin:0;font-size:20px">🗝️ You've been invited to record</h1>
       <p style="color:rgba(255,255,255,.8);margin:8px 0 0;font-size:14px">${title}</p>
     </div>
     <div style="padding:32px">
@@ -216,7 +239,7 @@ async function sendPasskeyEmail(toEmail, toName, meeting) {
       <div style="background:#eef2ff;border-radius:12px;padding:16px;margin:0 0 24px">
         <p style="color:#4338ca;font-size:13px;font-weight:600;margin:0 0 6px">How to join:</p>
         <ol style="color:#6366f1;font-size:13px;padding-left:20px;margin:0;line-height:1.8">
-          <li>Open the AI Minutes app</li>
+          <li>Open the AI MeetNote app</li>
           <li>Click <strong>&quot;Join Meeting&quot;</strong> in the sidebar</li>
           <li>Enter the passkey above and click Join</li>
           <li>Start recording!</li>
@@ -229,20 +252,24 @@ async function sendPasskeyEmail(toEmail, toName, meeting) {
 </body>
 </html>`;
 
-  const fromAddress = process.env.EMAIL_FROM || process.env.EMAIL_USER;
+  console.log(`[sendPasskeyEmail] Sending to: ${toEmail}`);
 
-  console.log(`[sendPasskeyEmail] Attempting to send to: ${toEmail} from: ${fromAddress}`);
-
-  const info = await transporter.sendMail({
-    from: fromAddress,
-    to: toEmail,
-    subject: `You're invited to co-record: ${title}`,
-    text: `Hi ${toName},\n\nYou've been added as a co-recorder for "${title}".\n\nMeeting Passkey: ${passkey}\n\nGo to the app -> Join Meeting -> enter the passkey above.\n\n-- AI MeetNote`,
+  const { data, error } = await resend.emails.send({
+    from:     getFromAddress(),
+    reply_to: process.env.EMAIL_USER || undefined,
+    to:       [toEmail],
+    subject:  `You're invited to co-record: ${title}`,
+    text:     `Hi ${toName},\n\nYou've been added as a co-recorder for "${title}".\n\nMeeting Passkey: ${passkey}\n\nGo to the app → Join Meeting → enter the passkey above.\n\n-- AI MeetNote`,
     html,
   });
 
-  console.log(`✅ Passkey email sent to ${toEmail} — MessageID: ${info.messageId}`);
-  return info;
+  if (error) {
+    console.error('[sendPasskeyEmail] Resend error:', error);
+    throw new Error(`Resend API error: ${error.message || JSON.stringify(error)}`);
+  }
+
+  console.log(`✅ Passkey email sent to ${toEmail} — Resend ID: ${data.id}`);
+  return data;
 }
 
 module.exports = { sendSummaryEmail, sendPasskeyEmail };
