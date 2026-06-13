@@ -1,27 +1,29 @@
 const nodemailer = require('nodemailer');
 
-// Reusable transporter (created once at startup)
-// IMPORTANT: Use explicit host + port + family:4 instead of service:'gmail'
-// This forces IPv4 DNS resolution and avoids ENETUNREACH on IPv6-disabled networks.
-const transporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  port: 465,
-  secure: true,           // TLS on port 465
-  family: 4,              // force IPv4 — prevents ENETUNREACH on IPv6-disabled hosts
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-});
+/**
+ * Create a fresh transporter on every send call.
+ * This ensures we always read the latest EMAIL_USER / EMAIL_PASS from process.env
+ * and avoids stale-credential failures from module-level evaluation order.
+ */
+function createTransporter() {
+  const user = process.env.EMAIL_USER;
+  const pass = process.env.EMAIL_PASS;
 
-// Verify transporter on startup so email misconfigurations surface immediately
-transporter.verify((err) => {
-  if (err) {
-    console.error('❌ Email transporter configuration error:', err.message);
-  } else {
-    console.log('✅ Email transporter ready (IPv4 · smtp.gmail.com:465) — using', process.env.EMAIL_USER);
+  if (!user || !pass) {
+    throw new Error(
+      'Email credentials missing — set EMAIL_USER and EMAIL_PASS (no spaces) in server/.env'
+    );
   }
-});
+
+  return nodemailer.createTransport({
+    host: 'smtp.gmail.com',
+    port: 465,
+    secure: true,         // TLS on port 465
+    family: 4,            // force IPv4 — prevents ENETUNREACH on IPv6-disabled hosts
+    auth: { user, pass },
+    tls: { rejectUnauthorized: false }, // safety net for corporate / self-signed certs
+  });
+}
 
 /**
  * Format the meeting summary as a clean plain-text email body.
@@ -135,10 +137,12 @@ function buildEmailHtml(meeting) {
  * Send the meeting summary email to all recipients WITH .docx attachment.
  * @param {string[]} recipients   - Array of email addresses.
  * @param {object}  meeting       - Mongoose Meeting document.
- * @param {Buffer}  docxBuffer    - The .docx file buffer to attach.
+ * @param {Buffer}  docxBuffer    - The .docx file buffer to attach (optional).
  */
 async function sendSummaryEmail(recipients, meeting, docxBuffer) {
   if (!recipients || recipients.length === 0) return;
+
+  const transporter = createTransporter();
 
   const mailOptions = {
     from:    process.env.EMAIL_FROM || process.env.EMAIL_USER,
@@ -174,9 +178,7 @@ async function sendSummaryEmail(recipients, meeting, docxBuffer) {
 async function sendPasskeyEmail(toEmail, toName, meeting) {
   const { title, agenda, passkey } = meeting;
 
-  if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-    throw new Error('Email credentials not configured (EMAIL_USER / EMAIL_PASS missing in .env)');
-  }
+  const transporter = createTransporter(); // will throw if credentials missing
 
   const html = `
 <!DOCTYPE html>
@@ -206,7 +208,7 @@ async function sendPasskeyEmail(toEmail, toName, meeting) {
         <ol style="color:#6366f1;font-size:13px;padding-left:20px;margin:0;line-height:1.8">
           <li>Open the AI Minutes app</li>
           <li>Click <strong>&quot;Join Meeting&quot;</strong> in the sidebar</li>
-          <li>Enter the passkey above and your email</li>
+          <li>Enter the passkey above and click Join</li>
           <li>Start recording!</li>
         </ol>
       </div>
@@ -217,7 +219,6 @@ async function sendPasskeyEmail(toEmail, toName, meeting) {
 </body>
 </html>`;
 
-  // Build a safe "from" address — nodemailer accepts "Display Name <email@domain>" format
   const fromAddress = process.env.EMAIL_FROM || process.env.EMAIL_USER;
 
   console.log(`[sendPasskeyEmail] Attempting to send to: ${toEmail} from: ${fromAddress}`);

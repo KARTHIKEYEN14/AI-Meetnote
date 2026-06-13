@@ -4,7 +4,7 @@ import {
   ArrowLeft, CheckCircle2, Target, Lightbulb,
   Loader, AlertCircle, FileDown, RefreshCw,
   Calendar, Clock, Timer, User2, Users2,
-  MessageSquare, ShieldCheck, Download, Radio, ChevronDown
+  MessageSquare, ShieldCheck, Download, Radio, ChevronDown, Mail
 } from 'lucide-react';
 import api from '../services/api';
 
@@ -18,6 +18,9 @@ export default function SummaryPage() {
   const [approveError, setApproveError] = useState('');
   const [approved, setApproved] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [resending, setResending] = useState(false);
+  const [resendMsg, setResendMsg] = useState('');
+  const [emailWarning, setEmailWarning] = useState('');
 
   const loggedInUser = JSON.parse(localStorage.getItem('user') || '{}');
 
@@ -38,14 +41,33 @@ export default function SummaryPage() {
   const handleApprove = async () => {
     setApproving(true);
     setApproveError('');
+    setEmailWarning('');
     try {
-      await api.post(`/meetings/${id}/approve`, {});
+      const { data } = await api.post(`/meetings/${id}/approve`, {});
       setApproved(true);
+      // Surface email warning if email failed but approval succeeded
+      if (data.emailError) {
+        setEmailWarning(`Approved! But email failed: ${data.emailError}. Use "Resend Email" below to retry.`);
+      }
       await fetchMeeting();
     } catch (err) {
       setApproveError(err.response?.data?.message || 'Approval failed. Please try again.');
     } finally {
       setApproving(false);
+    }
+  };
+
+  const handleResendEmail = async () => {
+    setResending(true);
+    setResendMsg('');
+    try {
+      const { data } = await api.post(`/meetings/${id}/resend-email`, {});
+      setResendMsg(data.message || 'Email resent successfully.');
+      setEmailWarning('');
+    } catch (err) {
+      setResendMsg(err.response?.data?.message || 'Resend failed. Please try again.');
+    } finally {
+      setResending(false);
     }
   };
 
@@ -328,7 +350,23 @@ export default function SummaryPage() {
             </div>
           )}
 
-          {approved && (
+          {emailWarning && (
+            <div className="mb-4 bg-amber-900/30 border border-amber-700/50 text-amber-300 px-4 py-3 rounded-2xl text-sm">
+              ⚠️ {emailWarning}
+            </div>
+          )}
+
+          {resendMsg && (
+            <div className={`mb-4 px-4 py-3 rounded-2xl text-sm font-semibold ${
+              resendMsg.toLowerCase().includes('fail') || resendMsg.toLowerCase().includes('error')
+                ? 'bg-red-900/30 border border-red-700/50 text-red-300'
+                : 'bg-green-500/10 border border-green-500/30 text-green-300'
+            }`}>
+              {resendMsg}
+            </div>
+          )}
+
+          {approved && !emailWarning && (
             <div className="mb-4 flex items-center gap-2 px-4 py-3 bg-green-500/10 border border-green-500/30 text-green-300 rounded-2xl text-sm font-semibold">
               <CheckCircle2 className="w-4 h-4" />
               Minutes approved and emailed to all participants!
@@ -378,6 +416,22 @@ export default function SummaryPage() {
               <><Download className="w-4 h-4" /> Download .docx</>
             )}
           </button>
+
+          {/* Resend Email — only shown after approval (retry if email failed) */}
+          {approved && (
+            <button
+              id="resend-email-btn"
+              onClick={handleResendEmail}
+              disabled={resending}
+              className="w-full flex items-center justify-center gap-2 py-3 bg-teal-600/20 hover:bg-teal-600/30 border border-teal-500/30 text-teal-300 rounded-full font-bold text-sm transition-all disabled:opacity-50"
+            >
+              {resending ? (
+                <><Loader className="w-4 h-4 animate-spin" /> Resending…</>
+              ) : (
+                <><Mail className="w-4 h-4" /> Resend Summary Email</>
+              )}
+            </button>
+          )}
         </div>
       </div>
     </div>

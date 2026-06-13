@@ -22,18 +22,14 @@ export default function JoinMeetingPage() {
         title:               meeting.title,
         passkey:             meeting.passkey,
         agenda:              meeting.agenda || '',
-        isJoined:            true,
+        isParticipant:       true,
+        isHost:              false,
         remoteMode:          meeting.remoteMode || false,
         expectedParticipants: meeting.expectedParticipants || 0,
       }));
 
-      if (meeting.remoteMode) {
-        // Remote session → participant records on their own device
-        navigate(`/meeting/participant-record/${meeting._id}`);
-      } else {
-        // Classic local mode → existing multi-speaker recording room
-        navigate(`/meeting/record/${meeting._id}`);
-      }
+      // Always use the unified RecordingPage — it handles both host and participant roles
+      navigate(`/meeting/record/${meeting._id}`);
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to join meeting. Check the passkey.');
     } finally {

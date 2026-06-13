@@ -639,16 +639,67 @@ router.post('/:id/approve', auth, async (req, res) => {
     meeting.hostApproved = true;
     await meeting.save();
 
-    // Build the .docx and email to all recipients
-    const docxBuffer = await buildDocxBuffer(meeting);
-    if (meeting.recipientEmails.length > 0) {
-      await sendSummaryEmail(meeting.recipientEmails, meeting, docxBuffer);
+    // Build .docx (separate try so we can distinguish docx vs email errors)
+    let docxBuffer = null;
+    let docxError = null;
+    try {
+      docxBuffer = await buildDocxBuffer(meeting);
+    } catch (dErr) {
+      docxError = dErr.message;
+      console.error('[approve] Failed to build .docx:', dErr.message);
     }
 
-    res.json({ message: 'Meeting approved and emailed to all participants.', hostApproved: true });
+    // Send email (only if recipients exist)
+    let emailSent = false;
+    let emailError = null;
+    if (meeting.recipientEmails.length > 0) {
+      try {
+        await sendSummaryEmail(meeting.recipientEmails, meeting, docxBuffer);
+        emailSent = true;
+      } catch (eErr) {
+        emailError = eErr.message;
+        console.error('[approve] Failed to send email:', eErr.message);
+      }
+    }
+
+    res.json({
+      message: emailSent
+        ? 'Meeting approved and emailed to all participants.'
+        : `Meeting approved${emailError ? ` but email failed: ${emailError}` : ' (no recipients).'}`,
+      hostApproved: true,
+      emailSent,
+      emailError: emailError || undefined,
+      docxError: docxError || undefined,
+    });
   } catch (err) {
     console.error('[POST /meetings/:id/approve]', err.message);
     res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ── POST /api/meetings/:id/resend-email — Retry sending summary email ─────────
+// Allows host to resend the summary + .docx email without re-approving.
+router.post('/:id/resend-email', auth, async (req, res) => {
+  try {
+    const meeting = await Meeting.findById(req.params.id);
+    if (!meeting) return res.status(404).json({ message: 'Meeting not found' });
+    if (String(meeting.host) !== String(req.user.id)) {
+      return res.status(403).json({ message: 'Only the host can resend the summary email.' });
+    }
+    if (meeting.status !== 'completed') {
+      return res.status(400).json({ message: 'Meeting is not yet processed.' });
+    }
+    if (meeting.recipientEmails.length === 0) {
+      return res.status(400).json({ message: 'No recipient emails configured for this meeting.' });
+    }
+
+    const docxBuffer = await buildDocxBuffer(meeting);
+    await sendSummaryEmail(meeting.recipientEmails, meeting, docxBuffer);
+
+    res.json({ message: `Summary email resent to ${meeting.recipientEmails.length} recipient(s).` });
+  } catch (err) {
+    console.error('[POST /meetings/:id/resend-email]', err.message);
+    res.status(500).json({ message: `Failed to resend email: ${err.message}` });
   }
 });
 

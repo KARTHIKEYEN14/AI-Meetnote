@@ -1,29 +1,45 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Mic, MicOff, X, UserPlus, Users, FileText, Square, ArrowLeft, Mail, Loader, Radio, Upload, Trash2, Copy, Eye, EyeOff, Check, KeyRound } from 'lucide-react';
+import {
+  Mic, MicOff, X, UserPlus, Users, FileText, Square,
+  ArrowLeft, Mail, Loader, Radio, Upload, Trash2,
+  Copy, Eye, EyeOff, Check, KeyRound, MessageSquare,
+  CheckCircle2, Clock, WifiOff,
+} from 'lucide-react';
 import api from '../services/api';
 
 const POLL_INTERVAL_MS = 3000;
+
+// ── Web Speech API helpers ─────────────────────────────────────────────────────
+const SpeechRecognition =
+  window.SpeechRecognition || window.webkitSpeechRecognition || null;
 
 export default function RecordingPage() {
   const { id } = useParams();
   const navigate = useNavigate();
 
   // ── Meeting info — loaded from API (reliable) + localStorage (instant fallback) ──
-  const currentInfo   = JSON.parse(localStorage.getItem('currentMeetingInfo') || '{}');
+  const currentInfo = JSON.parse(localStorage.getItem('currentMeetingInfo') || '{}');
 
   const [meetingTitle,  setMeetingTitle]  = useState(currentInfo.title   || `Meeting ${id}`);
   const [meetingAgenda, setMeetingAgenda] = useState(currentInfo.agenda  || '');
   const [passkey,       setPasskey]       = useState(currentInfo.passkey || '');
   const [remoteMode,    setRemoteMode]    = useState(currentInfo.remoteMode === true);
-  // expectedParts is used for remote mode display only
   const [expectedParts, setExpectedParts] = useState(currentInfo.expectedParticipants || 0);
 
-  // ── Speakers / participants ─────────────────────────────────────────────────
-  const hostUser = JSON.parse(localStorage.getItem('user') || '{}');
-  const hostName = hostUser.name || hostUser.email?.split('@')[0] || 'Host';
-  const hostEmail = hostUser.email || '';
+  // ── Role detection ─────────────────────────────────────────────────────────
+  // isParticipant=true when user joined via passkey (set by JoinMeetingPage)
+  const loggedInUser = JSON.parse(localStorage.getItem('user') || '{}');
+  const [isParticipant, setIsParticipant] = useState(
+    currentInfo.isParticipant === true || currentInfo.isHost === false
+  );
 
+  const hostName  = loggedInUser.name  || loggedInUser.email?.split('@')[0] || 'Host';
+  const hostEmail = loggedInUser.email || '';
+  const myName    = isParticipant ? (loggedInUser.name  || loggedInUser.email?.split('@')[0] || 'Participant') : hostName;
+  const myEmail   = isParticipant ? (loggedInUser.email || '') : hostEmail;
+
+  // ── Speakers / participants (host only — local multi-speaker mode) ───────────
   const initialSpeaker = { name: hostName, email: hostEmail, isHost: true };
   const [speakers, setSpeakers] = useState([initialSpeaker]);
   const [activeSpeakerIndex, setActiveSpeakerIndex] = useState(0);
@@ -44,26 +60,131 @@ export default function RecordingPage() {
   const [timer, setTimer] = useState(0);
   const [isEnding, setIsEnding] = useState(false);
   const [showBackConfirm, setShowBackConfirm] = useState(false);
-  const [chunkStatus, setChunkStatus] = useState(null); // remote mode progress
-  const [submitted, setSubmitted] = useState(false);    // remote: chunk uploaded
-  const [passkeyVisible, setPasskeyVisible] = useState(false); // show/hide passkey digits
-  const [passkeyCopied, setPasskeyCopied] = useState(false);   // copy feedback
+  const [chunkStatus, setChunkStatus] = useState(null);
+  const [submitted, setSubmitted] = useState(false);
+  const [passkeyVisible, setPasskeyVisible] = useState(false);
+  const [passkeyCopied, setPasskeyCopied] = useState(false);
+
+  // ── Live transcript state ──────────────────────────────────────────────────
+  const [transcriptLines, setTranscriptLines] = useState([]);
+  const [speechSupported] = useState(!!SpeechRecognition);
+  const [speechActive, setSpeechActive] = useState(false);
+  const transcriptEndRef = useRef(null);
+  const recognitionRef = useRef(null);
 
   // ── Audio refs ──────────────────────────────────────────────────────────────
-  const audioChunksRef = useRef([]);
+  const audioChunksRef     = useRef([]);
   const completedChunksRef = useRef([]);
-  const mediaRecorderRef = useRef(null);
-  const streamRef = useRef(null);
-  const timerRef = useRef(null);
-  const pollRef = useRef(null);
-  const startedAtRef = useRef(null);
+  const mediaRecorderRef   = useRef(null);
+  const streamRef          = useRef(null);
+  const timerRef           = useRef(null);
+  const pollRef            = useRef(null);
+  const chunkPollRef       = useRef(null);
+  const startedAtRef       = useRef(null);
 
   // ── Format timer ────────────────────────────────────────────────────────────
   const formatTime = (s) => {
-    const m = Math.floor(s / 60).toString().padStart(2, '0');
+    const m  = Math.floor(s / 60).toString().padStart(2, '0');
     const ss = (s % 60).toString().padStart(2, '0');
     return `${m}:${ss}`;
   };
+
+  // ── Auto-scroll transcript ──────────────────────────────────────────────────
+  useEffect(() => {
+    transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [transcriptLines]);
+
+  // ── Speech Recognition ──────────────────────────────────────────────────────
+  const startSpeechRecognition = useCallback((speakerName) => {
+    if (!SpeechRecognition) return;
+
+    // Stop any existing instance first
+    if (recognitionRef.current) {
+      try { recognitionRef.current.stop(); } catch (_) {}
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.lang = 'en-IN';
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognitionRef.current = recognition;
+
+    let interimLineId = null;
+
+    recognition.onstart = () => setSpeechActive(true);
+    recognition.onend   = () => {
+      setSpeechActive(false);
+      // Auto-restart if mic is still on (recognition ends after silence/timeout)
+      if (micOn && mediaRecorderRef.current?.state === 'recording') {
+        setTimeout(() => {
+          try { recognition.start(); } catch (_) {}
+        }, 300);
+      }
+    };
+
+    recognition.onresult = (event) => {
+      let interim = '';
+      let finalText = '';
+
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        if (event.results[i].isFinal) {
+          finalText += event.results[i][0].transcript;
+        } else {
+          interim += event.results[i][0].transcript;
+        }
+      }
+
+      setTranscriptLines((prev) => {
+        const updated = [...prev];
+
+        // Replace or append interim
+        if (interim) {
+          if (interimLineId !== null) {
+            const idx = updated.findIndex((l) => l.id === interimLineId);
+            if (idx !== -1) {
+              updated[idx] = { ...updated[idx], text: interim, interim: true };
+              return updated;
+            }
+          }
+          interimLineId = Date.now();
+          updated.push({ id: interimLineId, speaker: speakerName, text: interim, interim: true });
+          return updated;
+        }
+
+        // Finalise interim line if exists, else push new
+        if (finalText.trim()) {
+          if (interimLineId !== null) {
+            const idx = updated.findIndex((l) => l.id === interimLineId);
+            if (idx !== -1) {
+              updated[idx] = { ...updated[idx], text: finalText.trim(), interim: false };
+              interimLineId = null;
+              return updated;
+            }
+          }
+          updated.push({ id: Date.now(), speaker: speakerName, text: finalText.trim(), interim: false });
+          interimLineId = null;
+        }
+
+        return updated;
+      });
+    };
+
+    recognition.onerror = (e) => {
+      if (e.error !== 'no-speech' && e.error !== 'aborted') {
+        console.warn('[speech]', e.error);
+      }
+    };
+
+    try { recognition.start(); } catch (_) {}
+  }, [micOn]);
+
+  const stopSpeechRecognition = useCallback(() => {
+    if (recognitionRef.current) {
+      try { recognitionRef.current.stop(); } catch (_) {}
+      recognitionRef.current = null;
+    }
+    setSpeechActive(false);
+  }, []);
 
   // ── Start recording (auto on mount) ────────────────────────────────────────
   const startRecordingChunk = useCallback(async () => {
@@ -77,14 +198,19 @@ export default function RecordingPage() {
         if (e.data.size > 0) audioChunksRef.current.push(e.data);
       };
       mr.start();
+
+      // Start live transcript
+      const activeName = isParticipant ? myName : (speakers[activeSpeakerIndex]?.name || 'Speaker');
+      startSpeechRecognition(activeName);
     } catch (err) {
       setError('Microphone access denied. Please allow microphone and refresh.');
     }
-  }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSpeakerIndex, speakers, isParticipant, myName, startSpeechRecognition]);
 
   // ── Stop current chunk, save it ────────────────────────────────────────────
-  const stopCurrentChunk = () => {
-    return new Promise((resolve) => {
+  const stopCurrentChunk = () =>
+    new Promise((resolve) => {
       if (!mediaRecorderRef.current || mediaRecorderRef.current.state === 'inactive') {
         resolve();
         return;
@@ -97,9 +223,8 @@ export default function RecordingPage() {
       };
       mediaRecorderRef.current.stop();
     });
-  };
 
-  // ── Switch active speaker ────────────────────────────────────────────────
+  // ── Switch active speaker (host only) ──────────────────────────────────────
   const switchSpeaker = async (idx) => {
     if (idx === activeSpeakerIndex) return;
     await stopCurrentChunk();
@@ -116,6 +241,7 @@ export default function RecordingPage() {
         };
         mediaRecorderRef.current.stop();
       }
+      stopSpeechRecognition();
       setMicOn(false);
     } else {
       await startRecordingChunk();
@@ -123,20 +249,17 @@ export default function RecordingPage() {
     }
   };
 
-  // ── Add Co-Recorder (invite) ─────────────────────────────────────────────
+  // ── Add Co-Recorder (host only) ─────────────────────────────────────────
   const handleAddSpeaker = async () => {
     if (!newName.trim()) return;
+    setSpeakers((prev) => [...prev, { name: newName.trim(), email: newEmail.trim(), isHost: false }]);
 
-    // Add to local speakers list immediately
-    setSpeakers(prev => [...prev, { name: newName.trim(), email: newEmail.trim(), isHost: false }]);
-
-    // If email provided, send passkey via email
     if (newEmail.trim()) {
       setInviteLoading(true);
       setInviteError('');
       try {
         await api.post(`/meetings/${id}/invite-speaker`, {
-          name: newName.trim(),
+          name:  newName.trim(),
           email: newEmail.trim(),
         });
         setInviteSuccess(true);
@@ -146,7 +269,6 @@ export default function RecordingPage() {
         setInviteLoading(false);
       }
     } else {
-      // No email — close immediately
       closeAddSpeakerModal();
     }
   };
@@ -163,34 +285,21 @@ export default function RecordingPage() {
   // ── Remove Co-Recorder (host only) ──────────────────────────────────────
   const handleRemoveSpeaker = async (idx) => {
     const speaker = speakers[idx];
-    if (!speaker || speaker.isHost) return; // cannot remove host
-
-    // Remove from local state first (optimistic)
-    setSpeakers(prev => prev.filter((_, i) => i !== idx));
-
-    // If the active speaker is removed, switch back to host (index 0)
-    if (activeSpeakerIndex === idx) {
-      setActiveSpeakerIndex(0);
-    } else if (activeSpeakerIndex > idx) {
-      setActiveSpeakerIndex(prev => prev - 1);
-    }
-
-    // Remove from backend if speaker has an email
+    if (!speaker || speaker.isHost) return;
+    setSpeakers((prev) => prev.filter((_, i) => i !== idx));
+    if (activeSpeakerIndex === idx) setActiveSpeakerIndex(0);
+    else if (activeSpeakerIndex > idx) setActiveSpeakerIndex((p) => p - 1);
     if (speaker.email) {
-      try {
-        await api.delete(`/meetings/${id}/speakers/${encodeURIComponent(speaker.email)}`);
-      } catch (err) {
-        console.warn('[remove-speaker] Backend removal failed:', err.response?.data?.message || err.message);
-        // Non-critical: local state already updated
-      }
+      try { await api.delete(`/meetings/${id}/speakers/${encodeURIComponent(speaker.email)}`); }
+      catch (err) { console.warn('[remove-speaker]', err.response?.data?.message || err.message); }
     }
   };
 
-  // ── End meeting (LOCAL mode) ─────────────────────────────────────────────
+  // ── End meeting (host LOCAL mode) ────────────────────────────────────────
   const handleEndMeeting = async () => {
     if (isEnding) return;
     setIsEnding(true);
-
+    stopSpeechRecognition();
     await stopCurrentChunk();
     clearInterval(timerRef.current);
 
@@ -211,7 +320,6 @@ export default function RecordingPage() {
         formData.append(`audio_${i}`, blob, `chunk_${i}.webm`);
         speakerNames.push(speakers[speakerIndex]?.name || `Speaker ${speakerIndex + 1}`);
       });
-
       formData.append('speakerNames', JSON.stringify(speakerNames));
       formData.append('participants', JSON.stringify(
         speakers.map(({ name, email, isHost }) => ({ name, email, isHost: !!isHost }))
@@ -223,7 +331,6 @@ export default function RecordingPage() {
       });
 
       setProcessingStatus('AI is transcribing and summarising…');
-
       pollRef.current = setInterval(async () => {
         try {
           const { data } = await api.get(`/meetings/${id}/status`);
@@ -245,10 +352,11 @@ export default function RecordingPage() {
     }
   };
 
-  // ── Submit host chunk (REMOTE mode) ─────────────────────────────────────
+  // ── Submit chunk (REMOTE mode — host OR participant) ─────────────────────
   const handleSubmitRemoteChunk = async () => {
     if (isEnding) return;
     setIsEnding(true);
+    stopSpeechRecognition();
     await stopCurrentChunk();
     clearInterval(timerRef.current);
 
@@ -263,14 +371,12 @@ export default function RecordingPage() {
     setProcessingStatus('Uploading your recording…');
 
     try {
-      // Merge all local chunks into one blob
-      const allBlobs = chunks.map(c => c.blob);
+      const allBlobs = chunks.map((c) => c.blob);
       const merged   = new Blob(allBlobs, { type: 'audio/webm' });
-
       const formData = new FormData();
-      formData.append('audio', merged, 'host_recording.webm');
-      formData.append('participantName', hostName);
-      formData.append('participantEmail', hostEmail);
+      formData.append('audio', merged, 'recording.webm');
+      formData.append('participantName',  myName);
+      formData.append('participantEmail', myEmail);
       formData.append('startedAt', startedAtRef.current?.toISOString() || new Date().toISOString());
 
       await api.post(`/meetings/${id}/submit-chunk`, formData, {
@@ -281,7 +387,7 @@ export default function RecordingPage() {
       setIsProcessing(false);
       setIsEnding(false);
 
-      // Poll until all chunks received and summary ready
+      // Poll until all chunks are in and summary is ready
       pollRef.current = setInterval(async () => {
         try {
           const { data } = await api.get(`/meetings/${id}/chunk-status`);
@@ -299,8 +405,18 @@ export default function RecordingPage() {
     }
   };
 
-  // ── Fetch meeting from API on mount — ensures passkey is always available ──
-  // (localStorage is empty after a Vercel deploy, page refresh, or direct URL)
+  // ── Poll chunk-status for People panel (always, host AND participant) ──────
+  useEffect(() => {
+    chunkPollRef.current = setInterval(async () => {
+      try {
+        const { data } = await api.get(`/meetings/${id}/chunk-status`);
+        setChunkStatus(data);
+      } catch (_) {}
+    }, POLL_INTERVAL_MS);
+    return () => clearInterval(chunkPollRef.current);
+  }, [id]);
+
+  // ── Fetch meeting from API on mount ─────────────────────────────────────
   useEffect(() => {
     api.get(`/meetings/${id}`)
       .then(({ data }) => {
@@ -309,13 +425,21 @@ export default function RecordingPage() {
         if (data.agenda)    setMeetingAgenda(data.agenda);
         setRemoteMode(!!data.remoteMode);
         setExpectedParts(data.expectedParticipants || 0);
-        // Also refresh localStorage so it's in sync
+
+        // Detect host by comparing meeting.host with logged-in user id
+        if (data.host && loggedInUser._id) {
+          const iAmHost = String(data.host) === String(loggedInUser._id);
+          setIsParticipant(!iAmHost);
+        }
+
         localStorage.setItem('currentMeetingInfo', JSON.stringify({
           title:                data.title,
           passkey:              data.passkey,
           agenda:               data.agenda,
           remoteMode:           data.remoteMode,
           expectedParticipants: data.expectedParticipants,
+          isParticipant:        currentInfo.isParticipant,
+          isHost:               currentInfo.isHost,
         }));
       })
       .catch((err) => console.warn('[RecordingPage] Could not fetch meeting:', err.message));
@@ -330,9 +454,11 @@ export default function RecordingPage() {
     return () => {
       clearInterval(timerRef.current);
       clearInterval(pollRef.current);
+      clearInterval(chunkPollRef.current);
+      stopSpeechRecognition();
       streamRef.current?.getTracks().forEach((t) => t.stop());
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ── Processing screen ────────────────────────────────────────────────────
@@ -350,15 +476,19 @@ export default function RecordingPage() {
     );
   }
 
-  // ── Submitted banner (remote host waiting for others) ────────────────────
+  // ── Submitted banner (waiting for others) ────────────────────────────────
   if (submitted) {
     return (
       <div className="flex-1 bg-[#0d1117] flex flex-col items-center justify-center p-8 text-center min-h-screen">
         <div className="w-20 h-20 rounded-full bg-green-500/15 border border-green-500/30 flex items-center justify-center mb-6">
           <Upload className="w-10 h-10 text-green-400" />
         </div>
-        <h2 className="text-2xl font-bold text-white mb-2">Your Recording Submitted!</h2>
-        <p className="text-slate-400 max-w-sm mb-6">Waiting for all participants to submit their recordings before AI generates the summary.</p>
+        <h2 className="text-2xl font-bold text-white mb-2">Recording Submitted!</h2>
+        <p className="text-slate-400 max-w-sm mb-6">
+          {isParticipant
+            ? 'Your audio has been uploaded. Waiting for all participants to submit before AI generates the summary.'
+            : 'Waiting for all participants to submit their recordings before AI generates the summary.'}
+        </p>
         {chunkStatus && (
           <div className="bg-[#1e293b] border border-white/10 rounded-2xl px-8 py-5 mb-6">
             <p className="text-xs text-slate-500 uppercase tracking-widest font-semibold mb-2">Session Progress</p>
@@ -370,7 +500,7 @@ export default function RecordingPage() {
             <div className="h-2 bg-white/10 rounded-full overflow-hidden">
               <div
                 className="h-full bg-gradient-to-r from-violet-500 to-indigo-500 rounded-full transition-all duration-700"
-                style={{ width: `${Math.min(100,(chunkStatus.chunksReceived/chunkStatus.expectedParticipants)*100)}%` }}
+                style={{ width: `${Math.min(100, (chunkStatus.chunksReceived / chunkStatus.expectedParticipants) * 100)}%` }}
               />
             </div>
             {chunkStatus.submitters?.length > 0 && (
@@ -378,7 +508,7 @@ export default function RecordingPage() {
                 {chunkStatus.submitters.map((s, i) => (
                   <div key={i} className="flex items-center gap-2 text-xs text-slate-400">
                     <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
-                    {s.name}{s.isHost ? ' (You — Host)' : ''}
+                    {s.name}{s.isHost ? ' (Host)' : ''}
                   </div>
                 ))}
               </div>
@@ -393,6 +523,10 @@ export default function RecordingPage() {
     );
   }
 
+  // ── Determine end-button mode ────────────────────────────────────────────
+  // Participant always submits a chunk. Host in remoteMode also submits chunk.
+  const showSubmitBtn = isParticipant || remoteMode;
+
   // ── Main recording UI ────────────────────────────────────────────────────
   return (
     <div className="flex-1 flex flex-col bg-[#0d1117] text-white overflow-hidden" style={{ minHeight: '100vh' }}>
@@ -400,7 +534,6 @@ export default function RecordingPage() {
       {/* ── Top bar ──────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between px-6 py-3 border-b border-white/10 bg-[#111827]">
         <div className="flex items-center gap-3">
-          {/* Back / leave button */}
           <button
             onClick={() => setShowBackConfirm(true)}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-400 hover:text-white rounded-full text-xs font-medium transition-all"
@@ -409,19 +542,21 @@ export default function RecordingPage() {
           </button>
           <div className="min-w-0">
             <h1 className="text-sm font-bold text-white truncate">{meetingTitle}</h1>
-            {meetingAgenda && (
-              <p className="text-xs text-slate-400 truncate">{meetingAgenda}</p>
-            )}
+            {meetingAgenda && <p className="text-xs text-slate-400 truncate">{meetingAgenda}</p>}
           </div>
         </div>
 
         <div className="flex items-center gap-3 shrink-0">
-          {/* Remote mode badge */}
-          {remoteMode && (
+          {/* Role badge */}
+          {isParticipant ? (
+            <span className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600/20 border border-blue-500/30 text-blue-300 rounded-full text-xs font-bold">
+              <Radio className="w-3 h-3" /> Participant · Remote
+            </span>
+          ) : remoteMode ? (
             <span className="flex items-center gap-1.5 px-3 py-1.5 bg-violet-600/20 border border-violet-500/30 text-violet-300 rounded-full text-xs font-bold">
               <Radio className="w-3 h-3" /> Host · Remote
             </span>
-          )}
+          ) : null}
 
           {/* Timer */}
           <span className="bg-white/10 text-white font-mono font-bold text-sm px-3 py-1.5 rounded-full tabular-nums">
@@ -429,7 +564,7 @@ export default function RecordingPage() {
           </span>
 
           {/* End / Submit button */}
-          {remoteMode ? (
+          {showSubmitBtn ? (
             <button
               id="end-meeting-btn"
               onClick={handleSubmitRemoteChunk}
@@ -453,18 +588,21 @@ export default function RecordingPage() {
         </div>
       </div>
 
-      {/* ── Body: left transcript + right panel ──────────────────────────── */}
+      {/* ── Body ─────────────────────────────────────────────────────────── */}
       <div className="recording-body flex flex-1 overflow-hidden">
 
-        {/* ── LEFT: Live Transcript Area ───────────────────────────────── */}
+        {/* ── LEFT: Speaker switcher + mic controls (host only in local mode) ── */}
         <div className="flex-1 flex flex-col p-5 overflow-hidden">
 
-          {/* Transcript header */}
+          {/* Header */}
           <div className="flex items-center justify-between mb-3">
-            <span className="text-sm font-semibold text-white">Live Transcript</span>
+            <span className="text-sm font-semibold text-white flex items-center gap-2">
+              <MessageSquare className="w-4 h-4 text-indigo-400" />
+              Live Transcript
+            </span>
             <span className={`flex items-center gap-1.5 text-xs font-medium ${micOn ? 'text-green-400' : 'text-slate-500'}`}>
               <span className={`w-2 h-2 rounded-full ${micOn ? 'bg-green-400 animate-pulse' : 'bg-slate-600'}`} />
-              {micOn ? 'Recording' : 'Paused'}
+              {micOn ? (speechActive ? 'Listening' : 'Recording') : 'Paused'}
             </span>
           </div>
 
@@ -476,52 +614,97 @@ export default function RecordingPage() {
             </div>
           )}
 
-          {/* Active speaker label */}
-          <div className="mb-2">
-            <span className="text-xs text-slate-500 uppercase tracking-widest font-semibold">
-              Active Speaker — Click to Switch
-            </span>
-          </div>
-
-          {/* Speaker switcher pills */}
-          <div className="flex flex-wrap gap-2 mb-3">
-            {speakers.map((sp, idx) => (
-              <div key={idx} className="relative group">
-                <button
-                  id={`speaker-pill-${idx}`}
-                  onClick={() => switchSpeaker(idx)}
-                  className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full text-sm font-semibold transition-all ${
-                    idx === activeSpeakerIndex
-                      ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/30 ring-2 ring-indigo-400/50'
-                      : 'bg-white/8 text-slate-300 hover:bg-white/15 border border-white/10'
-                  } ${!sp.isHost ? 'pr-8' : ''}`}
-                >
-                  <span className="w-5 h-5 rounded-full bg-white/20 flex items-center justify-center text-xs font-bold">
-                    {sp.name.charAt(0).toUpperCase()}
-                  </span>
-                  {sp.name}
-                </button>
-                {/* Remove button — only for co-recorders, only for host user */}
-                {!sp.isHost && (
-                  <button
-                    onClick={(e) => { e.stopPropagation(); handleRemoveSpeaker(idx); }}
-                    title="Remove co-recorder"
-                    className="absolute right-1.5 top-1/2 -translate-y-1/2 w-5 h-5 rounded-full bg-red-600/80 hover:bg-red-600 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
-                )}
+          {/* Speaker pills — host local mode only */}
+          {!isParticipant && !remoteMode && (
+            <>
+              <div className="mb-2">
+                <span className="text-xs text-slate-500 uppercase tracking-widest font-semibold">
+                  Active Speaker — Click to Switch
+                </span>
               </div>
-            ))}
-          </div>
+              <div className="flex flex-wrap gap-2 mb-3">
+                {speakers.map((sp, idx) => (
+                  <div key={idx} className="relative group">
+                    <button
+                      id={`speaker-pill-${idx}`}
+                      onClick={() => switchSpeaker(idx)}
+                      className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full text-sm font-semibold transition-all ${
+                        idx === activeSpeakerIndex
+                          ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/30 ring-2 ring-indigo-400/50'
+                          : 'bg-white/8 text-slate-300 hover:bg-white/15 border border-white/10'
+                      } ${!sp.isHost ? 'pr-8' : ''}`}
+                    >
+                      <span className="w-5 h-5 rounded-full bg-white/20 flex items-center justify-center text-xs font-bold">
+                        {sp.name.charAt(0).toUpperCase()}
+                      </span>
+                      {sp.name}
+                    </button>
+                    {!sp.isHost && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleRemoveSpeaker(idx); }}
+                        title="Remove co-recorder"
+                        className="absolute right-1.5 top-1/2 -translate-y-1/2 w-5 h-5 rounded-full bg-red-600/80 hover:bg-red-600 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
 
-          {/* Transcript box */}
+          {/* ── Live transcript box ── */}
           <div className="flex-1 bg-[#161b27] rounded-2xl border border-white/8 p-5 flex flex-col overflow-hidden">
-            <div className="flex-1 flex flex-col items-center justify-center text-center">
-              <Mic className="w-10 h-10 text-slate-600 mb-3" />
-              <p className="text-slate-500 font-medium">Speak into your microphone…</p>
-              <p className="text-slate-600 text-sm mt-1">Allow mic access when prompted</p>
-            </div>
+
+            {!speechSupported ? (
+              /* Browser doesn't support Web Speech API */
+              <div className="flex-1 flex flex-col items-center justify-center text-center">
+                <WifiOff className="w-10 h-10 text-slate-600 mb-3" />
+                <p className="text-slate-500 font-medium">Live transcript not available</p>
+                <p className="text-slate-600 text-sm mt-1">Use Chrome or Edge for real-time transcription</p>
+              </div>
+            ) : transcriptLines.length === 0 ? (
+              /* Waiting for first words */
+              <div className="flex-1 flex flex-col items-center justify-center text-center">
+                <Mic className="w-10 h-10 text-slate-600 mb-3" />
+                <p className="text-slate-500 font-medium">Speak into your microphone…</p>
+                <p className="text-slate-600 text-sm mt-1">
+                  {speechActive ? 'Listening — words will appear here' : 'Transcript will appear when you speak'}
+                </p>
+              </div>
+            ) : (
+              /* Transcript lines */
+              <div className="flex-1 overflow-y-auto space-y-3 pr-1">
+                {transcriptLines.map((line) => (
+                  <div
+                    key={line.id}
+                    className={`flex gap-3 transition-opacity ${line.interim ? 'opacity-50' : 'opacity-100'}`}
+                  >
+                    {/* Speaker avatar */}
+                    <div className="w-7 h-7 rounded-full bg-gradient-to-br from-indigo-500 to-blue-500 flex items-center justify-center text-xs font-bold text-white shrink-0 mt-0.5">
+                      {line.speaker.charAt(0).toUpperCase()}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <span className="text-xs text-indigo-400 font-semibold">{line.speaker}</span>
+                      <p className={`text-sm mt-0.5 leading-relaxed ${line.interim ? 'text-slate-500 italic' : 'text-slate-200'}`}>
+                        {line.text}
+                        {line.interim && <span className="ml-1 animate-pulse">…</span>}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+                <div ref={transcriptEndRef} />
+              </div>
+            )}
+
+            {/* Live indicator */}
+            {speechSupported && speechActive && (
+              <div className="mt-3 pt-3 border-t border-white/5 flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
+                <span className="text-xs text-slate-500">Transcribing live in en-IN</span>
+              </div>
+            )}
           </div>
 
           {/* Bottom toolbar */}
@@ -539,14 +722,17 @@ export default function RecordingPage() {
               {micOn ? 'Mic On' : 'Mic Off'}
             </button>
 
-            <button
-              id="add-speaker-btn"
-              onClick={() => setShowAddSpeaker(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-600/40 text-indigo-300 rounded-full text-sm font-semibold transition-all ml-auto"
-            >
-              <UserPlus className="w-4 h-4" />
-              Add Co-Recorder
-            </button>
+            {/* Add Co-Recorder — host only */}
+            {!isParticipant && (
+              <button
+                id="add-speaker-btn"
+                onClick={() => setShowAddSpeaker(true)}
+                className="flex items-center gap-2 px-4 py-2 bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-600/40 text-indigo-300 rounded-full text-sm font-semibold transition-all ml-auto"
+              >
+                <UserPlus className="w-4 h-4" />
+                Add Co-Recorder
+              </button>
+            )}
           </div>
         </div>
 
@@ -556,7 +742,7 @@ export default function RecordingPage() {
           <div className="flex border-b border-white/10">
             {[
               { key: 'people', label: 'People', icon: <Users className="w-4 h-4" /> },
-              { key: 'notes', label: 'Notes', icon: <FileText className="w-4 h-4" /> },
+              { key: 'notes',  label: 'Notes',  icon: <FileText className="w-4 h-4" /> },
             ].map(({ key, label, icon }) => (
               <button
                 key={key}
@@ -578,33 +764,24 @@ export default function RecordingPage() {
             {activeTab === 'people' && (
               <div className="space-y-2">
 
-                {/* ── Passkey card — host shares this manually ── */}
-                {passkey && (
+                {/* ── Passkey card — host only ── */}
+                {!isParticipant && passkey && (
                   <div className="mb-3 rounded-2xl border border-indigo-500/30 bg-indigo-950/40 p-3">
                     <div className="flex items-center gap-1.5 mb-2">
                       <KeyRound className="w-3.5 h-3.5 text-indigo-400" />
                       <span className="text-xs font-bold text-indigo-300 uppercase tracking-wider">Meeting Passkey</span>
                     </div>
-
-                    {/* Passkey value row */}
                     <div className="flex items-center gap-2 mb-2">
-                      <span
-                        className="flex-1 font-mono font-black text-xl tracking-[0.22em] text-white select-all"
-                        style={{ letterSpacing: passkeyVisible ? '0.22em' : undefined }}
-                      >
+                      <span className="flex-1 font-mono font-black text-xl tracking-[0.22em] text-white select-all">
                         {passkeyVisible ? passkey : '••••••'}
                       </span>
-
-                      {/* Show / hide */}
                       <button
-                        onClick={() => setPasskeyVisible(v => !v)}
+                        onClick={() => setPasskeyVisible((v) => !v)}
                         title={passkeyVisible ? 'Hide passkey' : 'Reveal passkey'}
                         className="w-7 h-7 rounded-full bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white flex items-center justify-center transition-all"
                       >
                         {passkeyVisible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                       </button>
-
-                      {/* Copy */}
                       <button
                         onClick={() => {
                           navigator.clipboard.writeText(passkey);
@@ -621,14 +798,14 @@ export default function RecordingPage() {
                         {passkeyCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
                       </button>
                     </div>
-
                     <p className="text-xs text-slate-500 leading-relaxed">
                       Share this passkey with co-recorders. They open <span className="text-slate-400 font-medium">Join Meeting</span> and enter it.
                     </p>
                   </div>
                 )}
 
-                {speakers.map((sp, idx) => (
+                {/* ── Local speakers list (host, non-remote) ── */}
+                {!isParticipant && !remoteMode && speakers.map((sp, idx) => (
                   <div
                     key={idx}
                     onClick={() => switchSpeaker(idx)}
@@ -648,7 +825,6 @@ export default function RecordingPage() {
                         {sp.email ? ' · ' + sp.email : ''}
                       </p>
                     </div>
-                    {/* Active indicator or remove button for co-recorders */}
                     {sp.isHost ? (
                       <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${idx === activeSpeakerIndex ? 'bg-green-400 animate-pulse' : 'bg-slate-600'}`} />
                     ) : (
@@ -663,13 +839,66 @@ export default function RecordingPage() {
                   </div>
                 ))}
 
-                <button
-                  onClick={() => setShowAddSpeaker(true)}
-                  className="w-full mt-2 flex items-center justify-center gap-2 py-2.5 border border-dashed border-white/20 text-slate-400 hover:border-indigo-500/50 hover:text-indigo-300 rounded-2xl text-sm font-medium transition-all"
-                >
-                  <UserPlus className="w-4 h-4" />
-                  Add Co-Recorder
-                </button>
+                {/* ── Remote participants list (from chunk-status polling) ── */}
+                {(remoteMode || isParticipant) && (
+                  <div className="space-y-2">
+                    <p className="text-xs text-slate-500 uppercase tracking-widest font-semibold mb-2 px-1">
+                      Participants
+                      {chunkStatus && (
+                        <span className="ml-2 text-violet-400">
+                          {chunkStatus.chunksReceived}/{chunkStatus.expectedParticipants} submitted
+                        </span>
+                      )}
+                    </p>
+
+                    {chunkStatus?.submitters?.length > 0 ? (
+                      chunkStatus.submitters.map((s, i) => (
+                        <div key={i} className="flex items-center gap-3 p-3 rounded-2xl bg-white/5">
+                          <div className="w-9 h-9 rounded-full bg-gradient-to-br from-green-500 to-emerald-600 flex items-center justify-center text-sm font-bold text-white shrink-0">
+                            {s.name.charAt(0).toUpperCase()}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-semibold text-white truncate">{s.name}</p>
+                            <p className="text-xs text-slate-400">
+                              {s.isHost ? 'Host' : 'Co-Recorder'}
+                              {s.email ? ' · ' + s.email : ''}
+                            </p>
+                          </div>
+                          {/* Submitted badge */}
+                          <CheckCircle2 className="w-4 h-4 text-green-400 shrink-0" title="Recording submitted" />
+                        </div>
+                      ))
+                    ) : (
+                      <div className="flex items-center gap-2 p-3 text-slate-500 text-xs">
+                        <Clock className="w-4 h-4" />
+                        Waiting for participants to submit…
+                      </div>
+                    )}
+
+                    {/* Progress bar */}
+                    {chunkStatus && chunkStatus.expectedParticipants > 0 && (
+                      <div className="mt-3 px-1">
+                        <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-gradient-to-r from-violet-500 to-indigo-500 rounded-full transition-all duration-700"
+                            style={{ width: `${Math.min(100, (chunkStatus.chunksReceived / chunkStatus.expectedParticipants) * 100)}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Add co-recorder button — host only */}
+                {!isParticipant && (
+                  <button
+                    onClick={() => setShowAddSpeaker(true)}
+                    className="w-full mt-2 flex items-center justify-center gap-2 py-2.5 border border-dashed border-white/20 text-slate-400 hover:border-indigo-500/50 hover:text-indigo-300 rounded-2xl text-sm font-medium transition-all"
+                  >
+                    <UserPlus className="w-4 h-4" />
+                    Add Co-Recorder
+                  </button>
+                )}
               </div>
             )}
 
@@ -686,8 +915,8 @@ export default function RecordingPage() {
         </div>
       </div>
 
-      {/* ── Add Co-Recorder Modal ─────────────────────────────────────────────── */}
-      {showAddSpeaker && (
+      {/* ── Add Co-Recorder Modal (host only) ─────────────────────────────── */}
+      {showAddSpeaker && !isParticipant && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 px-4">
           <div className="bg-[#1e293b] border border-white/10 rounded-3xl p-7 w-full max-w-sm shadow-2xl">
             {!inviteSuccess ? (
@@ -765,7 +994,6 @@ export default function RecordingPage() {
                 </div>
               </>
             ) : (
-              /* Success state */
               <div className="text-center py-4">
                 <div className="w-14 h-14 rounded-full bg-green-500/15 flex items-center justify-center mx-auto mb-4">
                   <Mail className="w-7 h-7 text-green-400" />
@@ -786,7 +1014,7 @@ export default function RecordingPage() {
         </div>
       )}
 
-      {/* ── Back / Leave Confirmation ─────────────────────────────────────────── */}
+      {/* ── Back / Leave Confirmation ──────────────────────────────────────── */}
       {showBackConfirm && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 px-4">
           <div className="bg-[#1e293b] border border-white/10 rounded-3xl p-7 w-full max-w-sm shadow-2xl">
@@ -804,6 +1032,7 @@ export default function RecordingPage() {
               <button
                 onClick={() => {
                   clearInterval(timerRef.current);
+                  stopSpeechRecognition();
                   streamRef.current?.getTracks().forEach((t) => t.stop());
                   navigate('/dashboard');
                 }}
