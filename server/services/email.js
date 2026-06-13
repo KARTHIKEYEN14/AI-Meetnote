@@ -2,8 +2,11 @@ const nodemailer = require('nodemailer');
 
 /**
  * Create a fresh transporter on every send call.
- * This ensures we always read the latest EMAIL_USER / EMAIL_PASS from process.env
- * and avoids stale-credential failures from module-level evaluation order.
+ *
+ * WHY port 587 (STARTTLS) instead of 465 (SSL)?
+ * Cloud providers like Render, Heroku, Railway, and AWS block outbound port 465
+ * at the network level. Port 587 with STARTTLS is the modern standard and is
+ * almost always allowed on cloud infrastructure.
  */
 function createTransporter() {
   const user = process.env.EMAIL_USER;
@@ -11,17 +14,24 @@ function createTransporter() {
 
   if (!user || !pass) {
     throw new Error(
-      'Email credentials missing — set EMAIL_USER and EMAIL_PASS (no spaces) in server/.env'
+      'Email credentials missing — set EMAIL_USER and EMAIL_PASS (no spaces) in Render env vars'
     );
   }
 
   return nodemailer.createTransport({
-    host: 'smtp.gmail.com',
-    port: 465,
-    secure: true,         // TLS on port 465
+    host:   'smtp.gmail.com',
+    port:   587,          // STARTTLS — works on Render/Heroku/AWS (465 is often blocked)
+    secure: false,        // false = STARTTLS upgrade after connect (not SSL-on-connect)
     family: 4,            // force IPv4 — prevents ENETUNREACH on IPv6-disabled hosts
-    auth: { user, pass },
-    tls: { rejectUnauthorized: false }, // safety net for corporate / self-signed certs
+    auth:   { user, pass },
+    connectionTimeout: 10000, // 10 s — bail early if host is unreachable
+    greetingTimeout:   10000,
+    socketTimeout:     15000,
+    tls: {
+      rejectUnauthorized: false, // allow self-signed certs on corporate proxies
+    },
+    logger:  true,  // pipe SMTP conversation to console — visible in Render logs
+    debug:   true,  // full SMTP debug output
   });
 }
 
