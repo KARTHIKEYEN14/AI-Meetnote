@@ -1,49 +1,48 @@
 /**
- * email.js — AI MeetNote email service via Resend HTTP API
+ * email.js — AI MeetNote email service via Brevo (formerly Sendinblue) HTTP API
  *
- * WHY Resend instead of Gmail SMTP?
- * Render (and most cloud providers) block all outbound SMTP ports (465 & 587)
- * at the network/firewall level to prevent spam. Resend uses a plain HTTPS
- * REST call — no special ports needed, works everywhere.
+ * WHY Brevo instead of Gmail SMTP / Resend?
+ * • Render blocks all outbound SMTP (ports 465 & 587) — Brevo uses HTTPS, never blocked.
+ * • Resend free tier only sends to your own email (requires domain for others).
+ * • Brevo free tier (300 emails/day) lets you send to ANYONE after verifying a
+ *   single sender email — no domain ownership required.
  *
- * Setup (one-time):
- *   1. Sign up free at https://resend.com  (3,000 emails/month free)
- *   2. Go to API Keys → Create API Key → copy it
- *   3. Add to Render env vars:  RESEND_API_KEY=re_xxxxxxxx
- *   4. (Optional) Verify your domain in Resend and set:
- *        RESEND_FROM=AI MeetNote <noreply@yourdomain.com>
- *      Without a verified domain the default sender is used.
+ * One-time setup:
+ *   1. Sign up free at https://app.brevo.com
+ *   2. Go to  Senders & IP → Senders → Add a new sender
+ *      Enter: karthikn1466@gmail.com  →  Submit
+ *      Check Gmail inbox → click verification link
+ *   3. Go to  SMTP & API → API Keys → Generate a new API key → copy it
+ *   4. Add to Render env vars:
+ *        BREVO_API_KEY = <your key>
+ *      (Keep EMAIL_USER / EMAIL_FROM as-is — used as the verified From address)
  */
 
-const { Resend } = require('resend');
+const brevoSdk = require('@getbrevo/brevo');
 
-/** Lazily create Resend client — reads API key fresh each call */
-function getResendClient() {
-  const apiKey = process.env.RESEND_API_KEY;
+/** Lazily create Brevo API client — reads key fresh every call */
+function getBrevoClient() {
+  const apiKey = process.env.BREVO_API_KEY;
   if (!apiKey) {
     throw new Error(
-      'RESEND_API_KEY is not set. ' +
-      'Sign up at https://resend.com, create an API key, ' +
-      'then add RESEND_API_KEY to your Render environment variables.'
+      'BREVO_API_KEY is not set. ' +
+      'Sign up at https://app.brevo.com → SMTP & API → API Keys, ' +
+      'then add BREVO_API_KEY to your Render environment variables.'
     );
   }
-  return new Resend(apiKey);
+
+  const defaultClient = brevoSdk.ApiClient.instance;
+  defaultClient.authentications['api-key'].apiKey = apiKey;
+  return new brevoSdk.TransactionalEmailsApi();
 }
 
-/**
- * Resolve the "from" address.
- * Priority: RESEND_FROM env var → fallback to Resend shared sender.
- * The shared sender (onboarding@resend.dev) works without domain verification.
- */
-function getFromAddress() {
-  return process.env.RESEND_FROM || 'AI MeetNote <onboarding@resend.dev>';
+/** Verified sender address — must match what you verified in Brevo Senders */
+function getSenderEmail() {
+  return process.env.EMAIL_USER || process.env.EMAIL_FROM || 'karthikn1466@gmail.com';
 }
 
 // ── Email body builders ────────────────────────────────────────────────────────
 
-/**
- * Format the meeting summary as a clean plain-text email body.
- */
 function buildEmailBody(meeting) {
   const { title, agenda, summary, createdAt } = meeting;
   const date = createdAt
@@ -81,9 +80,6 @@ function buildEmailBody(meeting) {
   return lines.filter((l) => l !== null).join('\n');
 }
 
-/**
- * Build an HTML version of the email for richer clients.
- */
 function buildEmailHtml(meeting) {
   const { title, agenda, summary, createdAt, participants } = meeting;
   const date = createdAt
@@ -162,7 +158,7 @@ function buildEmailHtml(meeting) {
 // ── Public send functions ──────────────────────────────────────────────────────
 
 /**
- * Send the meeting summary email to all recipients WITH optional .docx attachment.
+ * Send meeting summary email to all recipients WITH optional .docx attachment.
  * @param {string[]} recipients  - Array of email addresses.
  * @param {object}   meeting     - Mongoose Meeting document.
  * @param {Buffer}   docxBuffer  - The .docx file buffer to attach (optional).
@@ -170,48 +166,42 @@ function buildEmailHtml(meeting) {
 async function sendSummaryEmail(recipients, meeting, docxBuffer) {
   if (!recipients || recipients.length === 0) return;
 
-  const resend = getResendClient();
+  const api     = getBrevoClient();
+  const fromEmail = getSenderEmail();
+  const sendSmtpEmail = new brevoSdk.SendSmtpEmail();
 
-  const attachments = [];
+  sendSmtpEmail.sender  = { name: 'AI MeetNote', email: fromEmail };
+  sendSmtpEmail.to      = recipients.map((email) => ({ email }));
+  sendSmtpEmail.subject = `Meeting Summary: ${meeting.title}`;
+  sendSmtpEmail.textContent = buildEmailBody(meeting);
+  sendSmtpEmail.htmlContent = buildEmailHtml(meeting);
+
   if (docxBuffer) {
     const safeTitle = meeting.title.replace(/[^a-z0-9]/gi, '_').toLowerCase();
-    // Resend expects base64-encoded content
-    attachments.push({
-      filename: `${safeTitle}_minutes.docx`,
-      content:  docxBuffer.toString('base64'),
-    });
+    sendSmtpEmail.attachment = [
+      {
+        name:    `${safeTitle}_minutes.docx`,
+        content: docxBuffer.toString('base64'),
+      },
+    ];
   }
 
   console.log(`[sendSummaryEmail] Sending to: ${recipients.join(', ')}`);
-
-  const { data, error } = await resend.emails.send({
-    from:     getFromAddress(),
-    reply_to: process.env.EMAIL_USER || undefined,  // replies go back to host's Gmail
-    to:       recipients,
-    subject:  `Meeting Summary: ${meeting.title}`,
-    text:     buildEmailBody(meeting),
-    html:     buildEmailHtml(meeting),
-    attachments,
-  });
-
-  if (error) {
-    console.error('[sendSummaryEmail] Resend error:', error);
-    throw new Error(`Resend API error: ${error.message || JSON.stringify(error)}`);
-  }
-
-  console.log(`📧 Summary email sent to [${recipients.join(', ')}] — Resend ID: ${data.id}`);
-  return data;
+  const result = await api.sendTransacEmail(sendSmtpEmail);
+  console.log(`📧 Summary email sent — Brevo messageId: ${result.body?.messageId || result.messageId}`);
+  return result;
 }
 
 /**
- * Send the meeting passkey to a co-recorder so they can join the meeting.
+ * Send the meeting passkey to a co-recorder.
  * @param {string} toEmail  - Recipient email address.
- * @param {string} toName   - Recipient name (for personalisation).
+ * @param {string} toName   - Recipient name.
  * @param {object} meeting  - Mongoose Meeting document.
  */
 async function sendPasskeyEmail(toEmail, toName, meeting) {
   const { title, agenda, passkey } = meeting;
-  const resend = getResendClient();
+  const api       = getBrevoClient();
+  const fromEmail = getSenderEmail();
 
   const html = `
 <!DOCTYPE html>
@@ -252,24 +242,17 @@ async function sendPasskeyEmail(toEmail, toName, meeting) {
 </body>
 </html>`;
 
+  const sendSmtpEmail = new brevoSdk.SendSmtpEmail();
+  sendSmtpEmail.sender      = { name: 'AI MeetNote', email: fromEmail };
+  sendSmtpEmail.to          = [{ email: toEmail, name: toName }];
+  sendSmtpEmail.subject     = `You're invited to co-record: ${title}`;
+  sendSmtpEmail.textContent = `Hi ${toName},\n\nYou've been added as a co-recorder for "${title}".\n\nMeeting Passkey: ${passkey}\n\nGo to the app → Join Meeting → enter the passkey above.\n\n-- AI MeetNote`;
+  sendSmtpEmail.htmlContent = html;
+
   console.log(`[sendPasskeyEmail] Sending to: ${toEmail}`);
-
-  const { data, error } = await resend.emails.send({
-    from:     getFromAddress(),
-    reply_to: process.env.EMAIL_USER || undefined,
-    to:       [toEmail],
-    subject:  `You're invited to co-record: ${title}`,
-    text:     `Hi ${toName},\n\nYou've been added as a co-recorder for "${title}".\n\nMeeting Passkey: ${passkey}\n\nGo to the app → Join Meeting → enter the passkey above.\n\n-- AI MeetNote`,
-    html,
-  });
-
-  if (error) {
-    console.error('[sendPasskeyEmail] Resend error:', error);
-    throw new Error(`Resend API error: ${error.message || JSON.stringify(error)}`);
-  }
-
-  console.log(`✅ Passkey email sent to ${toEmail} — Resend ID: ${data.id}`);
-  return data;
+  const result = await api.sendTransacEmail(sendSmtpEmail);
+  console.log(`✅ Passkey email sent to ${toEmail} — Brevo messageId: ${result.body?.messageId || result.messageId}`);
+  return result;
 }
 
 module.exports = { sendSummaryEmail, sendPasskeyEmail };
