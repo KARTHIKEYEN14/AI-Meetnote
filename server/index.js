@@ -39,33 +39,29 @@ app.get('/api/health', (_, res) => res.json({ status: 'ok' }));
 // ── Email diagnostic — GET /api/health/email?to=you@example.com ───────────────
 // Tests the Brevo HTTP API — no SMTP ports needed.
 app.get('/api/health/email', async (req, res) => {
-  const brevoSdk = require('@getbrevo/brevo');
-  const apiKey   = process.env.BREVO_API_KEY;
-  const to       = req.query.to || process.env.EMAIL_USER || 'test@example.com';
-  const from     = process.env.EMAIL_USER || process.env.EMAIL_FROM || 'karthikn1466@gmail.com';
+  const { BrevoClient } = require('@getbrevo/brevo');
+  const apiKey = process.env.BREVO_API_KEY;
+  const to     = req.query.to || process.env.EMAIL_USER || 'test@example.com';
+  const from   = process.env.EMAIL_USER || process.env.EMAIL_FROM || 'karthikn1466@gmail.com';
 
   if (!apiKey) {
     return res.status(500).json({
-      ok:    false,
+      ok:   false,
       error: 'BREVO_API_KEY is not set.',
-      hint:  'Sign up free at https://app.brevo.com → SMTP & API → API Keys → Generate key → add as BREVO_API_KEY in Render env vars. Also verify your sender email under Senders & IP → Senders.',
+      hint:  'Sign up free at https://app.brevo.com → SMTP & API → API Keys → Generate key → add as BREVO_API_KEY in server/.env.',
     });
   }
 
   try {
-    const defaultClient = brevoSdk.ApiClient.instance;
-    defaultClient.authentications['api-key'].apiKey = apiKey;
-    const api = new brevoSdk.TransactionalEmailsApi();
+    const client = new BrevoClient({ apiKey });
+    const result = await client.transactionalEmails.sendTransacEmail({
+      sender:      { name: 'AI MeetNote', email: from },
+      to:          [{ email: to }],
+      subject:     '✅ AI MeetNote email test (Brevo)',
+      textContent: `Brevo HTTP API is working. Sent at ${new Date().toISOString()}`,
+    });
 
-    const sendSmtpEmail = new brevoSdk.SendSmtpEmail();
-    sendSmtpEmail.sender      = { name: 'AI MeetNote', email: from };
-    sendSmtpEmail.to          = [{ email: to }];
-    sendSmtpEmail.subject     = '✅ AI MeetNote email test (Brevo)';
-    sendSmtpEmail.textContent = `Brevo HTTP API is working correctly. Sent at ${new Date().toISOString()}`;
-
-    const result = await api.sendTransacEmail(sendSmtpEmail);
-    const msgId  = result.body?.messageId || result.messageId || 'sent';
-
+    const msgId = result.data?.messageId || result.messageId || 'sent';
     console.log(`[health/email] ✅ Brevo test email sent to ${to} — messageId: ${msgId}`);
     res.json({ ok: true, to, from, messageId: msgId });
   } catch (err) {
@@ -73,6 +69,7 @@ app.get('/api/health/email', async (req, res) => {
     res.status(500).json({ ok: false, error: err.message || JSON.stringify(err) });
   }
 });
+
 
 
 // ── Global error handler ──────────────────────────────────────────────────────

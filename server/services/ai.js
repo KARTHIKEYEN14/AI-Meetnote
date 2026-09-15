@@ -20,7 +20,7 @@ async function transcribeAudio(filePath) {
 }
 
 /**
- * Generate a structured meeting summary from a transcript using LLaMA 3.3 70B.
+ * Generate a structured meeting summary from a transcript using Groq Compound.
  * @param {string} transcript - Raw transcript text.
  * @param {string} [agenda=''] - Meeting agenda for extra context.
  * @returns {Promise<{keyPoints: string[], decisions: string[], actionItems: {task,assignee,status}[]}>}
@@ -46,7 +46,7 @@ Respond ONLY with valid JSON in exactly this format (no markdown, no explanation
     : `Transcript:\n${transcript}`;
 
   const completion = await groq.chat.completions.create({
-    model: 'llama-3.3-70b-versatile',
+    model: 'groq/compound',
     messages: [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userContent },
