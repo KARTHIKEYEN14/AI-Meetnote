@@ -215,11 +215,7 @@ export default function SummaryPage() {
           </div>
         )}
 
-        {/* ── Editable banner ────────────────────────────────────────────── */}
-        <div className="flex items-center gap-2 px-4 py-3 bg-amber-500/10 border border-amber-500/30 rounded-2xl mb-6 text-sm text-amber-300">
-          <span>✏️</span>
-          <span><strong>Editable draft</strong> — review the summary below before approving.</span>
-        </div>
+
 
         {/* ── Summary sections ───────────────────────────────────────────── */}
         <div className="space-y-5">
